@@ -4,12 +4,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from passlib.context import CryptContext
 
-# Fix for SQLAlchemy compatibility with Vercel's 'postgres://' prefix
-raw_url = os.getenv("POSTGRES_URL", "postgresql://user:pass@localhost/tourist_db")
-if raw_url and raw_url.startswith("postgres://"):
-    DATABASE_URL = raw_url.replace("postgres://", "postgresql://", 1)
-else:
-    DATABASE_URL = raw_url
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
 
 # Use pool_pre_ping to manage serverless connection recycling
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
