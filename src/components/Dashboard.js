@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Button, Badge, Alert, Container } from 'react-bootstrap';
-import { ShieldCheck, MapPin, Activity, Fingerprint } from 'lucide-react'; // Added Fingerprint here
+import { MapPin, Activity, Fingerprint } from 'lucide-react'; // Added Fingerprint here
 
 const Dashboard = ({ user }) => {
   const [location, setLocation] = useState({ lat: 0, lng: 0 });
