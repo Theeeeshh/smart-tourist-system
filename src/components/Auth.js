@@ -1,23 +1,18 @@
 import React, { useState } from 'react';
-import { Container, Card, Form, Button, Alert, Spinner } from 'react-bootstrap';
-import { Fingerprint, LogIn, UserPlus } from 'lucide-react';
+import { Container, Card, Form, Button, Alert, Spinner, InputGroup } from 'react-bootstrap';
+import { Fingerprint, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
 
 const Auth = ({ onLogin }) => {
   const [isSignup, setIsSignup] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false); // Toggle state
   const [error, setError] = useState('');
-  const [formData, setFormData] = useState({
-    username: '',
-    password: '',
-    passport: '' // Used by the backend to generate the SHA-256 Digital ID
-  });
+  const [formData, setFormData] = useState({ username: '', password: '', passport: '' });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
-
-    // Vercel routes these relative paths to your FastAPI index.py via vercel.json
     const endpoint = isSignup ? '/api/signup' : '/api/login';
 
     try {
@@ -26,32 +21,22 @@ const Auth = ({ onLogin }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
       });
-
       const data = await response.json();
-
-      if (response.ok) {
-        // Successful Auth returns { username, digital_id, access_token }
-        onLogin(data); 
-      } else {
-        // Displays error messages like "Username taken" or "Invalid credentials" from FastAPI
-        setError(data.detail || "Authentication failed. Please try again.");
-      }
+      if (response.ok) { onLogin(data); } 
+      else { setError(data.detail || "Authentication failed."); }
     } catch (err) {
-      setError("Connection error. Ensure your backend is deployed and active.");
-    } finally {
-      setLoading(false);
-    }
+      setError("Connection error. Ensure your backend is active.");
+    } finally { setLoading(false); }
   };
 
   return (
     <Container className="d-flex align-items-center justify-content-center" style={{ minHeight: '80vh' }}>
-      <Card className="shadow-lg border-0 p-4" style={{ width: '100%', maxWidth: '400px' }}>
+      <Card className="shadow-lg border-0 p-4 w-100" style={{ maxWidth: '400px' }}>
         <div className="text-center mb-4">
           <div className="bg-info d-inline-block p-3 rounded-circle mb-3 shadow-sm">
             <Fingerprint size={32} color="white" />
           </div>
           <h3 className="fw-bold">{isSignup ? 'Create Digital ID' : 'Tourist Login'}</h3>
-          <p className="text-muted small">Blockchain-Verified Identity System</p>
         </div>
 
         {error && <Alert variant="danger" className="py-2 small">{error}</Alert>}
@@ -61,64 +46,44 @@ const Auth = ({ onLogin }) => {
             <Form.Label className="small fw-bold">Username</Form.Label>
             <Form.Control 
               type="text" 
-              placeholder="Enter username"
               onChange={(e) => setFormData({...formData, username: e.target.value})}
-              required 
-              disabled={loading}
+              required disabled={loading}
             />
           </Form.Group>
 
           <Form.Group className="mb-3">
             <Form.Label className="small fw-bold">Password</Form.Label>
-            <Form.Control 
-              type="password" 
-              placeholder="Enter password"
-              onChange={(e) => setFormData({...formData, password: e.target.value})}
-              required 
-              disabled={loading}
-            />
+            <InputGroup>
+              <Form.Control 
+                type={showPassword ? "text" : "password"} // Conditional type
+                onChange={(e) => setFormData({...formData, password: e.target.value})}
+                required disabled={loading}
+              />
+              <Button 
+                variant="outline-secondary" 
+                onClick={() => setShowPassword(!showPassword)}
+                disabled={loading}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </Button>
+            </InputGroup>
           </Form.Group>
 
           {isSignup && (
             <Form.Group className="mb-3">
-              <Form.Label className="small fw-bold">Passport / Gov ID Number</Form.Label>
+              <Form.Label className="small fw-bold">Passport / Gov ID</Form.Label>
               <Form.Control 
                 type="text" 
-                placeholder="Required for Digital ID generation"
                 onChange={(e) => setFormData({...formData, passport: e.target.value})}
-                required 
-                disabled={loading}
+                required disabled={loading}
               />
-              <Form.Text className="text-muted" style={{ fontSize: '0.7rem' }}>
-                Your ID is hashed immediately for privacy and security.
-              </Form.Text>
             </Form.Group>
           )}
 
-          <Button 
-            variant="info" 
-            type="submit" 
-            className="w-100 text-white fw-bold py-2 shadow-sm mt-3"
-            disabled={loading}
-          >
-            {loading ? (
-              <Spinner animation="border" size="sm" />
-            ) : (
-              isSignup ? <><UserPlus size={18} className="me-2"/> Register</> : <><LogIn size={18} className="me-2"/> Sign In</>
-            )}
+          <Button variant="info" type="submit" className="w-100 text-white fw-bold py-2 mt-3" disabled={loading}>
+            {loading ? <Spinner size="sm" /> : (isSignup ? 'Register' : 'Sign In')}
           </Button>
         </Form>
-
-        <div className="text-center mt-4">
-          <Button 
-            variant="link" 
-            size="sm" 
-            onClick={() => { setIsSignup(!isSignup); setError(''); }} 
-            className="text-decoration-none text-info"
-          >
-            {isSignup ? "Already have a Digital ID? Login" : "New Tourist? Create Blockchain ID"}
-          </Button>
-        </div>
       </Card>
     </Container>
   );

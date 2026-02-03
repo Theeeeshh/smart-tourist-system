@@ -1,69 +1,98 @@
-import React, { useState , useEffect} from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Alert, Container } from 'react-bootstrap';
-import { MapPin, Activity, Fingerprint } from 'lucide-react'; // Added Fingerprint here
+import { MapPin, Activity, Fingerprint } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+// Fix for default Leaflet marker icons
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+let DefaultIcon = L.icon({ iconUrl: markerIcon, shadowUrl: markerShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
+L.Marker.prototype.options.icon = DefaultIcon;
+
+// Helper component to auto-center map when location updates
+function RecenterMap({ coords }) {
+  const map = useMap();
+  map.setView([coords.lat, coords.lng]);
+  return null;
+}
 
 const Dashboard = ({ user }) => {
-  const [location, setLocation] = useState({ lat: 0, lng: 0 });
-  const [serverData, setServerData] = useState({ status: "Scanning...", current_zone: "N/A" });
+  const [location, setLocation] = useState({ lat: 27.1751, lng: 78.0421 }); // Default to Taj Mahal
+  const [serverData, setServerData] = useState({ status: "Scanning...", digital_id: user.digital_id });
 
   useEffect(() => {
-    // Start Live Tracking using Browser Geolocation API
     const geo = navigator.geolocation.watchPosition(async (pos) => {
       const { latitude, longitude } = pos.coords;
       setLocation({ lat: latitude, lng: longitude });
 
-      // Sync with FastAPI Geofence Engine on Vercel
       try {
         const response = await fetch('/api/update-location', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: user.username,
-            lat: latitude,
-            lng: longitude
-          })
+          body: JSON.stringify({ username: user.username, lat: latitude, lng: longitude })
         });
         const data = await response.json();
         setServerData(data);
-      } catch (err) {
-        console.error("Tracking Error", err);
-      }
+      } catch (err) { console.error("Tracking Error", err); }
     }, (err) => console.error(err), { enableHighAccuracy: true });
 
     return () => navigator.geolocation.clearWatch(geo);
   }, [user.username]);
 
   return (
-    <Container className="mt-4">
-      <Card className="shadow-lg border-0 mb-4">
+    <Container className="mt-4 pb-5">
+      <Card className="shadow-lg border-0 mb-4 overflow-hidden">
+        {/* Map Header */}
+        <div style={{ height: '350px', width: '100%', position: 'relative' }}>
+          <MapContainer center={[location.lat, location.lng]} zoom={15} style={{ height: '100%', width: '100%' }}>
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <Marker position={[location.lat, location.lng]}>
+              <Popup>You are here <br/> (DID: {user.digital_id})</Popup>
+            </Marker>
+            {/* Visual Geofence around Taj Mahal */}
+            <Circle center={[27.1751, 78.0421]} radius={1000} pathOptions={{ color: 'blue', fillColor: 'blue', fillOpacity: 0.1 }} />
+            <RecenterMap coords={location} />
+          </MapContainer>
+        </div>
+
         <Card.Body className="p-4">
           <div className="d-flex justify-content-between align-items-center mb-4">
             <div>
-              <h4 className="fw-bold mb-1">Live Safety Monitor</h4>
-              {/* This line was causing your error - now Fingerprint is defined */}
-              <small className="text-muted"><Fingerprint size={14} className="me-1"/> ID: {user.digital_id}</small>
+              <h4 className="fw-bold mb-1">RakshaSetu Monitor</h4>
+              <small className="text-muted"><Fingerprint size={14} className="me-1"/> DID: {user.digital_id}</small>
             </div>
             <Badge bg={serverData.status === "Safe" ? "success" : "danger"} className="p-2">
               <Activity size={14} className="me-1" /> {serverData.status}
             </Badge>
           </div>
 
-          <div className="bg-light rounded p-4 text-center mb-3 border">
-            <MapPin className="text-danger mb-2" size={32} />
-            <h5 className="mb-1">{serverData.status === "Safe" ? "Monitored Zone" : "Restricted Area"}</h5>
-            <p className="text-muted small">Lat: {location.lat.toFixed(4)} | Lng: {location.lng.toFixed(4)}</p>
+          <div className="row g-3 mb-4">
+            <div className="col-6">
+              <div className="p-3 bg-light rounded text-center border">
+                <small className="text-muted d-block">Latitude</small>
+                <span className="fw-bold">{location.lat.toFixed(4)}</span>
+              </div>
+            </div>
+            <div className="col-6">
+              <div className="p-3 bg-light rounded text-center border">
+                <small className="text-muted d-block">Longitude</small>
+                <span className="fw-bold">{location.lng.toFixed(4)}</span>
+              </div>
+            </div>
           </div>
 
-          <Button variant="danger" className="w-100 py-3 fw-bold shadow">
+          <Button variant="danger" className="w-100 py-3 fw-bold shadow-sm animate-pulse">
             🚨 TRIGGER EMERGENCY SOS
           </Button>
         </Card.Body>
       </Card>
-      
-      {serverData.status === "Warning" && (
-        <Alert variant="danger" className="animate-pulse">
-          <strong>⚠️ Geofence Breach:</strong> You have entered a restricted area. 
-          Authorities have been notified via your Blockchain Digital ID.
+
+      {serverData.status !== "Safe" && (
+        <Alert variant="warning" className="border-warning">
+          <strong>⚠️ Security Notice:</strong> You are currently outside the designated safe zone. 
+          Your location is being transmitted to local authorities.
         </Alert>
       )}
     </Container>
