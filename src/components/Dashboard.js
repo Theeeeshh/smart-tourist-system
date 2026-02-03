@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Card, Button, Badge, Alert, Container } from 'react-bootstrap';
 import { ShieldCheck, MapPin, Activity, Fingerprint } from 'lucide-react'; // Added Fingerprint here
 
