@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { Container, Card, Form, Button, Alert, Spinner, InputGroup } from 'react-bootstrap';
-import { Fingerprint, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
+import { Fingerprint, Eye, EyeOff } from 'lucide-react';
 
 const Auth = ({ onLogin }) => {
   const [isSignup, setIsSignup] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false); // Toggle state
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [formData, setFormData] = useState({ username: '', password: '', passport: '' });
 
@@ -22,11 +22,16 @@ const Auth = ({ onLogin }) => {
         body: JSON.stringify(formData)
       });
       const data = await response.json();
-      if (response.ok) { onLogin(data); } 
-      else { setError(data.detail || "Authentication failed."); }
+      if (response.ok) { 
+        onLogin(data); 
+      } else { 
+        setError(data.detail || "Authentication failed."); 
+      }
     } catch (err) {
       setError("Connection error. Ensure your backend is active.");
-    } finally { setLoading(false); }
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   return (
@@ -47,7 +52,8 @@ const Auth = ({ onLogin }) => {
             <Form.Control 
               type="text" 
               onChange={(e) => setFormData({...formData, username: e.target.value})}
-              required disabled={loading}
+              required 
+              disabled={loading}
             />
           </Form.Group>
 
@@ -55,9 +61,10 @@ const Auth = ({ onLogin }) => {
             <Form.Label className="small fw-bold">Password</Form.Label>
             <InputGroup>
               <Form.Control 
-                type={showPassword ? "text" : "password"} // Conditional type
+                type={showPassword ? "text" : "password"}
                 onChange={(e) => setFormData({...formData, password: e.target.value})}
-                required disabled={loading}
+                required 
+                disabled={loading}
               />
               <Button 
                 variant="outline-secondary" 
@@ -75,14 +82,26 @@ const Auth = ({ onLogin }) => {
               <Form.Control 
                 type="text" 
                 onChange={(e) => setFormData({...formData, passport: e.target.value})}
-                required disabled={loading}
+                required 
+                disabled={loading}
               />
             </Form.Group>
           )}
 
           <Button variant="info" type="submit" className="w-100 text-white fw-bold py-2 mt-3" disabled={loading}>
-            {loading ? <Spinner size="sm" /> : (isSignup ? 'Register' : 'Sign In')}
+            {loading ? <Spinner animation="border" size="sm" /> : (isSignup ? 'Register' : 'Sign In')}
           </Button>
+
+          <div className="text-center mt-3">
+            <Button 
+              variant="link" 
+              size="sm" 
+              className="text-decoration-none text-info"
+              onClick={() => setIsSignup(!isSignup)}
+            >
+              {isSignup ? "Already have an ID? Login" : "New tourist? Register here"}
+            </Button>
+          </div>
         </Form>
       </Card>
     </Container>

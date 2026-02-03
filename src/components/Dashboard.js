@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Badge, Alert, Container } from 'react-bootstrap';
-import { MapPin, Activity, Fingerprint } from 'lucide-react';
+import { Activity, Fingerprint } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -8,18 +8,24 @@ import 'leaflet/dist/leaflet.css';
 // Fix for default Leaflet marker icons
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-let DefaultIcon = L.icon({ iconUrl: markerIcon, shadowUrl: markerShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
+let DefaultIcon = L.icon({ 
+  iconUrl: markerIcon, 
+  shadowUrl: markerShadow, 
+  iconSize: [25, 41], 
+  iconAnchor: [12, 41] 
+});
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// Helper component to auto-center map when location updates
 function RecenterMap({ coords }) {
   const map = useMap();
-  map.setView([coords.lat, coords.lng]);
+  useEffect(() => {
+    map.setView([coords.lat, coords.lng]);
+  }, [coords, map]);
   return null;
 }
 
 const Dashboard = ({ user }) => {
-  const [location, setLocation] = useState({ lat: 27.1751, lng: 78.0421 }); // Default to Taj Mahal
+  const [location, setLocation] = useState({ lat: 27.1751, lng: 78.0421 });
   const [serverData, setServerData] = useState({ status: "Scanning...", digital_id: user.digital_id });
 
   useEffect(() => {
@@ -35,7 +41,9 @@ const Dashboard = ({ user }) => {
         });
         const data = await response.json();
         setServerData(data);
-      } catch (err) { console.error("Tracking Error", err); }
+      } catch (err) { 
+        console.error("Tracking Error", err); 
+      }
     }, (err) => console.error(err), { enableHighAccuracy: true });
 
     return () => navigator.geolocation.clearWatch(geo);
@@ -44,15 +52,17 @@ const Dashboard = ({ user }) => {
   return (
     <Container className="mt-4 pb-5">
       <Card className="shadow-lg border-0 mb-4 overflow-hidden">
-        {/* Map Header */}
         <div style={{ height: '350px', width: '100%', position: 'relative' }}>
           <MapContainer center={[location.lat, location.lng]} zoom={15} style={{ height: '100%', width: '100%' }}>
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
             <Marker position={[location.lat, location.lng]}>
               <Popup>You are here <br/> (DID: {user.digital_id})</Popup>
             </Marker>
-            {/* Visual Geofence around Taj Mahal */}
-            <Circle center={[27.1751, 78.0421]} radius={1000} pathOptions={{ color: 'blue', fillColor: 'blue', fillOpacity: 0.1 }} />
+            <Circle 
+              center={[27.1751, 78.0421]} 
+              radius={1000} 
+              pathOptions={{ color: 'blue', fillColor: 'blue', fillOpacity: 0.1 }} 
+            />
             <RecenterMap coords={location} />
           </MapContainer>
         </div>
@@ -83,7 +93,7 @@ const Dashboard = ({ user }) => {
             </div>
           </div>
 
-          <Button variant="danger" className="w-100 py-3 fw-bold shadow-sm animate-pulse">
+          <Button variant="danger" className="w-100 py-3 fw-bold shadow-sm">
             🚨 TRIGGER EMERGENCY SOS
           </Button>
         </Card.Body>
@@ -92,7 +102,6 @@ const Dashboard = ({ user }) => {
       {serverData.status !== "Safe" && (
         <Alert variant="warning" className="border-warning">
           <strong>⚠️ Security Notice:</strong> You are currently outside the designated safe zone. 
-          Your location is being transmitted to local authorities.
         </Alert>
       )}
     </Container>
