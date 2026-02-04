@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Badge, Container, Card } from 'react-bootstrap';
+import { Button, Badge, Container, Card, Row, Col } from 'react-bootstrap'; // Added Row and Col
 import { ShieldAlert, Navigation, MapPin } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import { motion } from 'framer-motion';
@@ -11,6 +11,7 @@ import 'leaflet/dist/leaflet.css';
 // Fix for default Leaflet marker icons
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
 let DefaultIcon = L.icon({
   iconUrl: markerIcon,
   shadowUrl: markerShadow,
@@ -31,14 +32,14 @@ function RecenterMap({ coords }) {
 }
 
 const Dashboard = ({ user }) => {
-  const [location, setLocation] = useState({ lat: 27.1751, lng: 78.0421 }); // Default to Taj Mahal
+  const [location, setLocation] = useState({ lat: 27.1751, lng: 78.0421 }); 
   const [safeZones, setSafeZones] = useState([]);
   const [nearestZone, setNearestZone] = useState(null);
   const [serverData, setServerData] = useState({ status: "Scanning...", digital_id: user.digital_id });
 
   // Function to calculate distance between two points in meters
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371e3; // Earth radius in meters
+    const R = 6371e3; 
     const φ1 = lat1 * Math.PI/180;
     const φ2 = lat2 * Math.PI/180;
     const Δφ = (lat2-lat1) * Math.PI/180;
@@ -53,18 +54,15 @@ const Dashboard = ({ user }) => {
   };
 
   useEffect(() => {
-    // 1. Fetch Safe Zones once on load
     fetch('/api/admin/safe-zones')
       .then(res => res.json())
       .then(data => setSafeZones(Array.isArray(data) ? data : []));
 
-    // 2. Start Geolocation Watch
     const geo = navigator.geolocation.watchPosition(async (pos) => {
       const { latitude, longitude } = pos.coords;
       const currentLoc = { lat: parseFloat(latitude), lng: parseFloat(longitude) };
       setLocation(currentLoc);
 
-      // 3. Update backend via Redis
       try {
         const response = await fetch('/api/update-location', {
           method: 'POST',
@@ -88,7 +86,6 @@ const Dashboard = ({ user }) => {
     return () => navigator.geolocation.clearWatch(geo);
   }, [user.username]);
 
-  // Update nearest zone whenever location or safeZones change
   useEffect(() => {
     if (safeZones.length > 0 && location) {
       const distances = safeZones.map(zone => ({
@@ -104,7 +101,6 @@ const Dashboard = ({ user }) => {
     <Container className="mt-5 pb-5">
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
         
-        {/* Status Header */}
         <div className="d-flex justify-content-between align-items-center mb-4">
           <div>
             <h2 className="fw-bold mb-0">Travel Monitor</h2>
@@ -120,7 +116,6 @@ const Dashboard = ({ user }) => {
         </div>
 
         <div className="auth-card-inner p-0 overflow-hidden shadow-lg border-0">
-          {/* Map Section */}
           <div style={{ height: '450px', position: 'relative' }}>
             <MapContainer center={[location.lat, location.lng]} zoom={14} style={{ height: '100%', width: '100%' }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -148,7 +143,6 @@ const Dashboard = ({ user }) => {
             </MapContainer>
           </div>
 
-          {/* User Info & SOS Section */}
           <div className="p-4 bg-white">
             <Row className="mb-4 text-center g-3">
               <Col xs={6}>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Table, Form, Button, Badge } from 'react-bootstrap';
+import { Container, Row, Col, Table, Form, Button, Badge } from 'react-bootstrap'; // Verified all imports
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from 'react-leaflet';
 import { Users, MapPin, ShieldAlert, Trash2, Edit } from 'lucide-react';
 import L from 'leaflet';
@@ -10,6 +10,7 @@ import 'leaflet/dist/leaflet.css';
 // Fix for default Leaflet marker icons
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
 let DefaultIcon = L.icon({
   iconUrl: markerIcon,
   shadowUrl: markerShadow,
@@ -18,7 +19,7 @@ let DefaultIcon = L.icon({
 });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// Helper component to handle map clicks
+// Helper component to handle map clicks for coordinate selection
 function MapClickHandler({ onMapClick }) {
   useMapEvents({
     click: (e) => {
@@ -52,11 +53,10 @@ const Admin = () => {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5000); // Polling every 5s
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  // Handler to set coordinates from map click
   const handleMapClick = (lat, lng) => {
     if (editZone) {
       setEditZone({ ...editZone, lat: lat.toFixed(6), lng: lng.toFixed(6) });
@@ -113,7 +113,7 @@ const Admin = () => {
               ))}
             </MapContainer>
             <div className="bg-light p-2 text-center small text-muted">
-              Click anywhere on the map to set Safe Zone coordinates.
+              Click on the map to automatically set Latitude and Longitude.
             </div>
           </div>
         </Col>
