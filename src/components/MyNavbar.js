@@ -1,38 +1,70 @@
 import { Navbar, Nav, Container, Button } from 'react-bootstrap';
-import { Link } from 'react-router-dom';
-import { ShieldCheck, LayoutDashboard, Settings } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ShieldCheck, LayoutDashboard, Settings, LogIn, LogOut } from 'lucide-react';
 
-const MyNavbar = ({ user, onLogout }) => (
-  <Navbar bg="white" expand="lg" sticky="top" className="shadow-sm py-3 px-4 mb-4" style={{ borderRadius: '0 0 20px 20px' }}>
-    <Container>
-      <Navbar.Brand as={Link} to="/" className="fw-bold text-dark d-flex align-items-center">
-        <ShieldCheck className="me-2 text-info" /> RakshaSetu
-      </Navbar.Brand>
-      <Navbar.Toggle aria-controls="basic-navbar-nav" />
-      <Navbar.Collapse id="basic-navbar-nav">
-        <Nav className="ms-auto align-items-center">
-          <Nav.Link as={Link} to="/home" className="fw-semibold">Home</Nav.Link>
-          
-          {user && (
-            <>
-              <Nav.Link as={Link} to="/dashboard" className="fw-semibold">
-                <LayoutDashboard size={18} className="me-1" /> Dashboard
-              </Nav.Link>
-              
-              {/* Only show this if the user is an admin */}
-              {user.is_admin && (
-                <Nav.Link as={Link} to="/admin" className="fw-semibold text-danger">
-                  <Settings size={18} className="me-1" /> Admin Panel
+const MyNavbar = ({ user, onLogout }) => {
+  const navigate = useNavigate();
+
+  const handleLogoutClick = () => {
+    onLogout();
+    navigate('/'); // Redirect to landing page after logout
+  };
+
+  return (
+    <Navbar bg="white" expand="lg" sticky="top" className="shadow-sm py-3 px-4 mb-4" style={{ borderRadius: '0 0 20px 20px' }}>
+      <Container>
+        {/* Brand Logo */}
+        <Navbar.Brand as={Link} to="/" className="fw-bold text-dark d-flex align-items-center">
+          <ShieldCheck className="me-2 text-info" size={28} /> 
+          <span style={{ letterSpacing: '1px' }}>RakshaSetu</span>
+        </Navbar.Brand>
+
+        <Navbar.Toggle aria-controls="basic-navbar-nav" />
+
+        <Navbar.Collapse id="basic-navbar-nav">
+          <Nav className="ms-auto align-items-center">
+            <Nav.Link as={Link} to="/home" className="fw-semibold px-3 text-dark">Home</Nav.Link>
+            
+            {user ? (
+              <>
+                {/* Visible to all logged-in users */}
+                <Nav.Link as={Link} to="/dashboard" className="fw-semibold px-3 text-dark d-flex align-items-center">
+                  <LayoutDashboard size={18} className="me-1" /> Dashboard
                 </Nav.Link>
-              )}
-              
-              <Button variant="outline-dark" size="sm" className="ms-lg-3 rounded-pill px-3" onClick={onLogout}>Logout</Button>
-            </>
-          )}
-        </Nav>
-      </Navbar.Collapse>
-    </Container>
-  </Navbar>
-);
+                
+                {/* ONLY visible if is_admin is true */}
+                {user.is_admin && (
+                  <Nav.Link as={Link} to="/admin" className="fw-semibold px-3 text-danger d-flex align-items-center">
+                    <Settings size={18} className="me-1" /> Admin Panel
+                  </Nav.Link>
+                ) : null}
+                
+                <Button 
+                  variant="outline-dark" 
+                  size="sm" 
+                  className="ms-lg-3 rounded-pill px-4 fw-bold d-flex align-items-center" 
+                  onClick={handleLogoutClick}
+                >
+                  <LogOut size={16} className="me-2" /> Logout
+                </Button>
+              </>
+            ) : (
+              /* ONLY visible if NO user is logged in */
+              <Button 
+                as={Link} 
+                to="/login" 
+                variant="dark" 
+                size="sm" 
+                className="ms-lg-3 rounded-pill px-4 fw-bold d-flex align-items-center bg-dark"
+              >
+                <LogIn size={16} className="me-2" /> Login
+              </Button>
+            )}
+          </Nav>
+        </Navbar.Collapse>
+      </Container>
+    </Navbar>
+  );
+};
 
 export default MyNavbar;
