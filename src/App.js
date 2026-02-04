@@ -4,7 +4,7 @@ import MyNavbar from './components/MyNavbar';
 import Home from './components/Home';
 import Dashboard from './components/Dashboard';
 import Auth from './components/Auth';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
@@ -31,21 +31,23 @@ function App() {
 
   return (
     <Router>
-      <div className="app-theme-wrapper">
+      <div className="app-container">
         <MyNavbar user={user} onLogout={logout} />
         
-        {/* AnimatePresence allows for smooth exit animations between routes */}
         <AnimatePresence mode="wait">
           <Routes>
             <Route path="/" element={<Home />} />
+            
             <Route 
               path="/login" 
               element={!user ? <Auth onLogin={login} /> : <Navigate to="/dashboard" replace />} 
             />
+
             <Route 
               path="/dashboard" 
               element={user ? <Dashboard user={user} /> : <Navigate to="/login" replace />} 
             />
+
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AnimatePresence>

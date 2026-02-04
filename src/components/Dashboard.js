@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Badge, Alert, Container, Row, Col } from 'react-bootstrap';
+import { Button, Badge, Alert, Container, Row, Col } from 'react-bootstrap';
 import { Activity, Fingerprint, Navigation, ShieldAlert } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import { motion } from 'framer-motion';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Fix for Leaflet icons
+// Leaflet icon fix
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 let DefaultIcon = L.icon({ 
@@ -58,8 +58,7 @@ const Dashboard = ({ user }) => {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
       >
-        <div className="auth-card-inner p-0 overflow-hidden">
-          {/* Light-themed Map */}
+        <div className="auth-card-inner p-0 overflow-hidden shadow-none border-0">
           <div style={{ height: '350px', width: '100%', position: 'relative' }}>
             <MapContainer center={[location.lat, location.lng]} zoom={15} style={{ height: '100%', width: '100%' }}>
               <TileLayer 
@@ -85,7 +84,7 @@ const Dashboard = ({ user }) => {
                 <small className="text-muted"><Fingerprint size={14} className="me-1"/> DID: {user.digital_id}</small>
               </div>
               <Badge 
-                className="p-2 shadow-sm"
+                className="p-2 shadow-sm border-0"
                 style={{ 
                     backgroundColor: serverData.status === "Safe" ? "#dcfce7" : "#fee2e2", 
                     color: serverData.status === "Safe" ? "#166534" : "#991b1b",
@@ -98,14 +97,14 @@ const Dashboard = ({ user }) => {
 
             <Row className="g-3 mb-4">
               <Col xs={6}>
-                <div className="p-3 bg-light rounded-4 text-center border">
+                <div className="p-3 bg-light rounded-4 text-center border-0 shadow-sm">
                   <Navigation size={18} className="mb-1" style={{ color: '#ff8a71' }} />
                   <small className="text-muted d-block">Latitude</small>
                   <span className="fw-bold">{location.lat.toFixed(4)}</span>
                 </div>
               </Col>
               <Col xs={6}>
-                <div className="p-3 bg-light rounded-4 text-center border">
+                <div className="p-3 bg-light rounded-4 text-center border-0 shadow-sm">
                   <Navigation size={18} className="mb-1" style={{ color: '#ff8a71', transform: 'rotate(90deg)' }} />
                   <small className="text-muted d-block">Longitude</small>
                   <span className="fw-bold">{location.lng.toFixed(4)}</span>
@@ -113,7 +112,7 @@ const Dashboard = ({ user }) => {
               </Col>
             </Row>
 
-            <Button className="btn-pill-gradient w-100 py-3 fw-bold">
+            <Button className="btn-pill-gradient w-100 py-3 fw-bold border-0">
               <ShieldAlert className="me-2" /> TRIGGER EMERGENCY SOS
             </Button>
           </div>
