@@ -53,7 +53,7 @@ def execute_migrations():
         connection.execute(text("""
             UPDATE users 
             SET is_admin = true 
-            WHERE username = 'YourUsername';
+            WHERE username = 'sunil';
         """))
         
         # Explicitly commit the changes
