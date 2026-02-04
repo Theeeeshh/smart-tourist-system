@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Table, Form, Button, Badge } from 'react-bootstrap';
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents, useMap } from 'react-leaflet';
 import { Users, MapPin, ShieldAlert, Trash2, Edit } from 'lucide-react';
 import L from 'leaflet';
 
@@ -29,16 +29,27 @@ function MapClickHandler({ onMapClick }) {
   return null;
 }
 
+// Automatically pans the map to fit all active tourists
+function MapBoundsManager({ tourists }) {
+  const map = useMap();
+  useEffect(() => {
+    const activeTourists = tourists.filter(t => t.last_lat && t.last_lng);
+    if (activeTourists.length > 0) {
+      const bounds = L.latLngBounds(activeTourists.map(t => [t.last_lat, t.last_lng]));
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
+    }
+  }, [tourists, map]);
+  return null;
+}
+
 const Admin = () => {
   const [tourists, setTourists] = useState([]);
   const [safeZones, setSafeZones] = useState([]);
   const [places, setPlaces] = useState([]);
   
-  // State for Places Management
   const [newPlace, setNewPlace] = useState({ name: '', city: '', img: '', details: '' });
   const [editPlace, setEditPlace] = useState(null);
   
-  // State for SafeZone Management
   const [newZone, setNewZone] = useState({ name: '', lat: '', lng: '', radius: '' });
   const [editZone, setEditZone] = useState(null);
 
@@ -59,7 +70,6 @@ const Admin = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Update form coordinates when user clicks the map
   const handleMapClick = (lat, lng) => {
     const formattedLat = lat.toFixed(6);
     const formattedLng = lng.toFixed(6);
@@ -70,7 +80,6 @@ const Admin = () => {
     }
   };
 
-  // --- PLACE HANDLERS ---
   const handlePlaceSubmit = async (e) => {
     e.preventDefault();
     const method = editPlace ? 'PUT' : 'POST';
@@ -92,7 +101,6 @@ const Admin = () => {
     }
   };
 
-  // --- ZONE HANDLERS ---
   const handleZoneSubmit = async (e) => {
     e.preventDefault();
     const method = editZone ? 'PUT' : 'POST';
@@ -118,13 +126,13 @@ const Admin = () => {
     <Container className="py-5">
       <h2 className="fw-bold mb-4 text-dark">Admin Command Center</h2>
       
-      {/* MAP & ACTIVE TOURISTS SECTION */}
       <Row className="g-4 mb-5">
         <Col lg={8}>
           <div className="auth-card-inner p-0 overflow-hidden" style={{ height: '450px', position: 'relative', zIndex: 1, borderRadius: '15px' }}>
             <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: '100%', width: '100%' }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               <MapClickHandler onMapClick={handleMapClick} />
+              <MapBoundsManager tourists={tourists} />
               {tourists.map(t => t.last_lat && (
                 <Marker key={t.id} position={[t.last_lat, t.last_lng]}>
                   <Popup>
@@ -169,7 +177,6 @@ const Admin = () => {
         </Col>
       </Row>
 
-      {/* PLACES MANAGEMENT */}
       <Row className="g-4 mb-5">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
@@ -206,7 +213,6 @@ const Admin = () => {
         </Col>
       </Row>
 
-      {/* SAFE ZONE MANAGEMENT */}
       <Row className="g-4">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
