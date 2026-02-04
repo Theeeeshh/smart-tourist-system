@@ -1,20 +1,17 @@
 import React, { useState } from 'react';
-import { Container, Card, Form, Button, Alert, Spinner, InputGroup } from 'react-bootstrap';
-import { Fingerprint, Eye, EyeOff } from 'lucide-react';
+import { Container, Form, Button, Alert, Spinner } from 'react-bootstrap';
+import { motion } from 'framer-motion';
 
 const Auth = ({ onLogin }) => {
   const [isSignup, setIsSignup] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
   const [formData, setFormData] = useState({ username: '', password: '', passport: '' });
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
     setLoading(true);
     const endpoint = isSignup ? '/api/signup' : '/api/login';
-
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -22,88 +19,82 @@ const Auth = ({ onLogin }) => {
         body: JSON.stringify(formData)
       });
       const data = await response.json();
-      if (response.ok) { 
-        onLogin(data); 
-      } else { 
-        setError(data.detail || "Authentication failed."); 
-      }
+      if (response.ok) onLogin(data);
+      else setError(data.detail || "Error occurred");
     } catch (err) {
-      setError("Connection error. Ensure your backend is active.");
-    } finally { 
-      setLoading(false); 
-    }
+      setError("Connection error");
+    } finally { setLoading(false); }
   };
 
   return (
-    <Container className="d-flex align-items-center justify-content-center" style={{ minHeight: '80vh' }}>
-      <Card className="shadow-lg border-0 p-4 w-100" style={{ maxWidth: '400px' }}>
-        <div className="text-center mb-4">
-          <div className="bg-info d-inline-block p-3 rounded-circle mb-3 shadow-sm">
-            <Fingerprint size={32} color="white" />
+    <Container className="d-flex align-items-center justify-content-center" style={{ minHeight: '100vh' }}>
+      <motion.div 
+        className="main-glass-outer"
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        style={{ width: '100%', maxWidth: '420px' }}
+      >
+        <div className="auth-card-inner">
+          <div className="text-center">
+            {/* Logo placeholder matching the balloon icon shape */}
+            <div className="app-logo-box">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="white">
+                <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
+              </svg>
+            </div>
+            <h3 className="fw-bold text-dark">Login To Your Account</h3>
+            <p className="text-muted small">Please enter details below</p>
           </div>
-          <h3 className="fw-bold">{isSignup ? 'Create Digital ID' : 'Tourist Login'}</h3>
-        </div>
 
-        {error && <Alert variant="danger" className="py-2 small">{error}</Alert>}
+          {error && <Alert variant="danger" className="py-2 small">{error}</Alert>}
 
-        <Form onSubmit={handleSubmit}>
-          <Form.Group className="mb-3">
-            <Form.Label className="small fw-bold">Username</Form.Label>
-            <Form.Control 
-              type="text" 
-              onChange={(e) => setFormData({...formData, username: e.target.value})}
-              required 
-              disabled={loading}
-            />
-          </Form.Group>
-
-          <Form.Group className="mb-3">
-            <Form.Label className="small fw-bold">Password</Form.Label>
-            <InputGroup>
-              <Form.Control 
-                type={showPassword ? "text" : "password"}
-                onChange={(e) => setFormData({...formData, password: e.target.value})}
-                required 
-                disabled={loading}
-              />
-              <Button 
-                variant="outline-secondary" 
-                onClick={() => setShowPassword(!showPassword)}
-                disabled={loading}
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </Button>
-            </InputGroup>
-          </Form.Group>
-
-          {isSignup && (
+          <Form onSubmit={handleSubmit} className="mt-4">
             <Form.Group className="mb-3">
-              <Form.Label className="small fw-bold">Passport / Gov ID</Form.Label>
+              <Form.Label className="small text-muted fw-bold">Username</Form.Label>
               <Form.Control 
+                className="form-control-custom"
                 type="text" 
-                onChange={(e) => setFormData({...formData, passport: e.target.value})}
-                required 
-                disabled={loading}
+                placeholder="Username"
+                onChange={(e) => setFormData({...formData, username: e.target.value})}
+                required
               />
             </Form.Group>
-          )}
 
-          <Button variant="info" type="submit" className="w-100 text-white fw-bold py-2 mt-3" disabled={loading}>
-            {loading ? <Spinner animation="border" size="sm" /> : (isSignup ? 'Register' : 'Sign In')}
-          </Button>
+            <Form.Group className="mb-3">
+              <Form.Label className="small text-muted fw-bold">Password</Form.Label>
+              <Form.Control 
+                className="form-control-custom"
+                type="password" 
+                placeholder="Password"
+                onChange={(e) => setFormData({...formData, password: e.target.value})}
+                required
+              />
+            </Form.Group>
 
-          <div className="text-center mt-3">
-            <Button 
-              variant="link" 
-              size="sm" 
-              className="text-decoration-none text-info"
-              onClick={() => setIsSignup(!isSignup)}
-            >
-              {isSignup ? "Already have an ID? Login" : "New tourist? Register here"}
+            {isSignup && (
+              <Form.Group className="mb-3">
+                <Form.Label className="small text-muted fw-bold">Passport ID</Form.Label>
+                <Form.Control 
+                  className="form-control-custom"
+                  type="text" 
+                  placeholder="ID Number"
+                  onChange={(e) => setFormData({...formData, passport: e.target.value})}
+                />
+              </Form.Group>
+            )}
+
+            <Button type="submit" className="btn-pill-gradient w-100 mt-3" disabled={loading}>
+              {loading ? <Spinner size="sm" /> : (isSignup ? 'Register' : 'Login')}
             </Button>
-          </div>
-        </Form>
-      </Card>
+
+            <div className="text-center mt-3">
+              <Button variant="link" size="sm" className="text-muted text-decoration-none" onClick={() => setIsSignup(!isSignup)}>
+                {isSignup ? "Have an account? Sign In" : "New tourist? Sign Up"}
+              </Button>
+            </div>
+          </Form>
+        </div>
+      </motion.div>
     </Container>
   );
 };
