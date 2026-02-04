@@ -5,7 +5,6 @@ from sqlalchemy.orm import sessionmaker
 from passlib.context import CryptContext
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -37,12 +36,9 @@ class Place(Base):
     img = Column(String)
     details = Column(Text)
 
-# --- EXECUTE MIGRATIONS ---
 def run_migrations():
     with engine.connect() as connection:
-        # Check and add column manually for existing databases
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
-        # Replace 'YourUsername' with your actual username to gain Admin access
         connection.execute(text("UPDATE users SET is_admin = true WHERE username = 'sunil';"))
         connection.commit()
 
