@@ -3,19 +3,6 @@ import { Button, Badge, Container } from 'react-bootstrap';
 import { ShieldAlert } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import { motion } from 'framer-motion';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-
-// Fix for default Leaflet marker icons
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-let DefaultIcon = L.icon({ 
-  iconUrl: markerIcon, 
-  shadowUrl: markerShadow, 
-  iconSize: [25, 41], 
-  iconAnchor: [12, 41] 
-});
-L.Marker.prototype.options.icon = DefaultIcon;
 
 function RecenterMap({ coords }) {
   const map = useMap();
@@ -33,13 +20,18 @@ const Dashboard = ({ user }) => {
 
     const geo = navigator.geolocation.watchPosition(async (pos) => {
       const { latitude, longitude } = pos.coords;
-      setLocation({ lat: latitude, lng: longitude });
+      const currentLoc = { lat: parseFloat(latitude), lng: parseFloat(longitude) };
+      setLocation(currentLoc);
 
       try {
         const response = await fetch('/api/update-location', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: user.username, lat: latitude, lng: longitude })
+          body: JSON.stringify({ 
+            username: user.username, 
+            lat: currentLoc.lat, 
+            lng: currentLoc.lng // Fixed key name to match backend
+          })
         });
         const data = await response.json();
         setServerData(data);
@@ -58,7 +50,7 @@ const Dashboard = ({ user }) => {
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               <Marker position={[location.lat, location.lng]}><Popup>You (DID: {user.digital_id})</Popup></Marker>
               {safeZones.map(zone => (
-                <Circle key={zone.id} center={[zone.lat, zone.lng]} radius={zone.radius} pathOptions={{ color: '#ff547b', fillColor: '#ff8a71', fillOpacity: 0.2 }}>
+                <Circle key={zone.id} center={[zone.lat, zone.lng]} radius={zone.radius} pathOptions={{ color: '#ff547b' }}>
                   <Popup>Safe Zone: {zone.name}</Popup>
                 </Circle>
               ))}
