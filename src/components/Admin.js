@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Row, Col, Table, Form, Button, Badge } from 'react-bootstrap';
-import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { motion } from 'framer-motion';
-import { Users, ShieldCheck, MapPin } from 'lucide-react';
+import { Users, MapPin } from 'lucide-react';
 
 const Admin = () => {
   const [tourists, setTourists] = useState([]);

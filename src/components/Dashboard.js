@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Badge, Alert, Container, Row, Col } from 'react-bootstrap';
+import { Button, Badge, Container, Col } from 'react-bootstrap';
 import { Activity, Fingerprint, Navigation, ShieldAlert } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import { motion } from 'framer-motion';
