@@ -94,13 +94,6 @@ const Admin = () => {
     fetchData();
   };
 
-  const deletePlace = async (id) => {
-    if (window.confirm("Delete this destination?")) {
-      await fetch(`/api/admin/places/${id}`, { method: 'DELETE' });
-      fetchData();
-    }
-  };
-
   const handleZoneSubmit = async (e) => {
     e.preventDefault();
     const method = editZone ? 'PUT' : 'POST';
@@ -113,13 +106,6 @@ const Admin = () => {
     setEditZone(null);
     setNewZone({ name: '', lat: '', lng: '', radius: '' });
     fetchData();
-  };
-
-  const deleteZone = async (id) => {
-    if (window.confirm("Delete this safe zone?")) {
-      await fetch(`/api/admin/safe-zones/${id}`, { method: 'DELETE' });
-      fetchData();
-    }
   };
 
   return (
@@ -146,7 +132,7 @@ const Admin = () => {
               ))}
             </MapContainer>
             <div className="bg-light p-2 text-center small text-muted border-top">
-              Tap the map to set coordinates for Safe Zones.
+              Tap the map or enter coordinates manually below.
             </div>
           </div>
         </Col>
@@ -177,6 +163,7 @@ const Admin = () => {
         </Col>
       </Row>
 
+      {/* PLACES MANAGEMENT */}
       <Row className="g-4 mb-5">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
@@ -203,7 +190,7 @@ const Admin = () => {
                     <td>{p.city}</td>
                     <td>
                       <Button variant="link" className="p-0 me-2" onClick={() => setEditPlace(p)}><Edit size={16}/></Button>
-                      <Button variant="link" className="text-danger p-0" onClick={() => deletePlace(p.id)}><Trash2 size={16}/></Button>
+                      <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/places/${p.id}`, {method: 'DELETE'}).then(fetchData)}><Trash2 size={16}/></Button>
                     </td>
                   </tr>
                 ))}
@@ -213,6 +200,7 @@ const Admin = () => {
         </Col>
       </Row>
 
+      {/* SAFE ZONE MANAGEMENT - MANUAL UPDATE ENABLED */}
       <Row className="g-4">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
@@ -220,8 +208,28 @@ const Admin = () => {
             <Form onSubmit={handleZoneSubmit}>
               <Form.Control className="mb-2" placeholder="Zone Name" value={editZone ? editZone.name : newZone.name} onChange={e => editZone ? setEditZone({...editZone, name: e.target.value}) : setNewZone({...newZone, name: e.target.value})} required />
               <Row>
-                <Col><Form.Control className="mb-2" placeholder="Lat" value={editZone ? editZone.lat : newZone.lat} readOnly required /></Col>
-                <Col><Form.Control className="mb-2" placeholder="Lng" value={editZone ? editZone.lng : newZone.lng} readOnly required /></Col>
+                <Col>
+                  <Form.Control 
+                    className="mb-2" 
+                    placeholder="Lat" 
+                    type="number" 
+                    step="any" 
+                    value={editZone ? editZone.lat : newZone.lat} 
+                    onChange={e => editZone ? setEditZone({...editZone, lat: e.target.value}) : setNewZone({...newZone, lat: e.target.value})} 
+                    required 
+                  />
+                </Col>
+                <Col>
+                  <Form.Control 
+                    className="mb-2" 
+                    placeholder="Lng" 
+                    type="number" 
+                    step="any" 
+                    value={editZone ? editZone.lng : newZone.lng} 
+                    onChange={e => editZone ? setEditZone({...editZone, lng: e.target.value}) : setNewZone({...newZone, lng: e.target.value})} 
+                    required 
+                  />
+                </Col>
               </Row>
               <Form.Control className="mb-3" placeholder="Radius (meters)" type="number" value={editZone ? editZone.radius : newZone.radius} onChange={e => editZone ? setEditZone({...editZone, radius: e.target.value}) : setNewZone({...newZone, radius: e.target.value})} required />
               <Button type="submit" className="w-100 btn-pill-gradient border-0">{editZone ? 'Update Zone' : 'Create Geofence'}</Button>
@@ -241,7 +249,7 @@ const Admin = () => {
                     <td>{z.radius}m</td>
                     <td>
                       <Button variant="link" className="p-0 me-2" onClick={() => setEditZone(z)}><Edit size={16}/></Button>
-                      <Button variant="link" className="text-danger p-0" onClick={() => deleteZone(z.id)}><Trash2 size={16}/></Button>
+                      <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/safe-zones/${z.id}`, {method: 'DELETE'}).then(fetchData)}><Trash2 size={16}/></Button>
                     </td>
                   </tr>
                 ))}
