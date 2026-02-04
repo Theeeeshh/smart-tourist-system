@@ -27,17 +27,16 @@ const MyNavbar = ({ user, onLogout }) => {
             
             {user ? (
               <>
-                {/* Visible to all logged-in users */}
                 <Nav.Link as={Link} to="/dashboard" className="fw-semibold px-3 text-dark d-flex align-items-center">
                   <LayoutDashboard size={18} className="me-1" /> Dashboard
                 </Nav.Link>
                 
-                {/* ONLY visible if is_admin is true */}
+                {/* Admin Role Check */}
                 {user.is_admin && (
                   <Nav.Link as={Link} to="/admin" className="fw-semibold px-3 text-danger d-flex align-items-center">
                     <Settings size={18} className="me-1" /> Admin Panel
                   </Nav.Link>
-                ) : null}
+                )}
                 
                 <Button 
                   variant="outline-dark" 
@@ -49,7 +48,6 @@ const MyNavbar = ({ user, onLogout }) => {
                 </Button>
               </>
             ) : (
-              /* ONLY visible if NO user is logged in */
               <Button 
                 as={Link} 
                 to="/login" 
