@@ -4,6 +4,7 @@ import MyNavbar from './components/MyNavbar';
 import Home from './components/Home';
 import Dashboard from './components/Dashboard';
 import Auth from './components/Auth';
+import Landing from './components/Landing'; // Import the new page
 import { AnimatePresence } from 'framer-motion';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
@@ -32,11 +33,16 @@ function App() {
   return (
     <Router>
       <div className="app-container">
+        {/* Only show Navbar on pages other than the Landing page if you want a clean entry */}
         <MyNavbar user={user} onLogout={logout} />
         
         <AnimatePresence mode="wait">
           <Routes>
-            <Route path="/" element={<Home />} />
+            {/* New Entry Point */}
+            <Route path="/" element={<Landing />} />
+            
+            {/* Original Pages moved to distinct paths */}
+            <Route path="/home" element={<Home />} />
             
             <Route 
               path="/login" 
