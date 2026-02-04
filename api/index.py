@@ -17,12 +17,22 @@ app = FastAPI()
 
 # Connect to Redis - Ensure redis-server is running
 # Use os.getenv("REDIS_URL") for production deployment
-REDIS_URL = os.getenv("KV_URL") # Vercel KV uses KV_URL by default
-if REDIS_URL:
-    r = redis.from_url(REDIS_URL, decode_responses=True)
-else:
-    # Fallback for local development
-    r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+# --- REDIS CONNECTION SETUP ---
+# Vercel KV usually provides KV_URL. Upstash might provide REDIS_URL.
+REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
+
+try:
+    if REDIS_URL:
+        # Connect to the cloud instance
+        r = redis.from_url(REDIS_URL, decode_responses=True)
+        print("Connected to Remote Redis")
+    else:
+        # Fallback for local development
+        r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        print("Connected to Local Redis")
+except Exception as e:
+    print(f"Redis Connection Failed: {e}")
+    r = None # Prevent crashes if Redis is down
 
 app.add_middleware(
     CORSMiddleware,
