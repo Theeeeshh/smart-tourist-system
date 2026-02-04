@@ -4,18 +4,20 @@ import MyNavbar from './components/MyNavbar';
 import Home from './components/Home';
 import Dashboard from './components/Dashboard';
 import Auth from './components/Auth';
-import Landing from './components/Landing'; // Import the new page
+import Landing from './components/Landing';
+import Admin from './components/Admin'; 
 import { AnimatePresence } from 'framer-motion';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
 
 function App() {
+  // Initialize user state from localStorage to persist sessions
   const [user, setUser] = useState(() => {
     try {
       const savedUser = localStorage.getItem('touristUser');
       return savedUser ? JSON.parse(savedUser) : null;
     } catch (error) {
-      console.error("Failed to parse user from localStorage", error);
+      console.error("Session recovery failed:", error);
       return null;
     }
   });
@@ -33,27 +35,42 @@ function App() {
   return (
     <Router>
       <div className="app-container">
-        {/* Only show Navbar on pages other than the Landing page if you want a clean entry */}
+        {/* Navbar receives user state to show/hide Login vs Logout buttons */}
         <MyNavbar user={user} onLogout={logout} />
         
         <AnimatePresence mode="wait">
           <Routes>
-            {/* New Entry Point */}
+            {/* 1. Public Landing Page */}
             <Route path="/" element={<Landing />} />
             
-            {/* Original Pages moved to distinct paths */}
+            {/* 2. Public Home Page (Places added by Admin appear here) */}
             <Route path="/home" element={<Home />} />
             
+            {/* 3. Auth Page (Redirects to Dashboard if already logged in) */}
             <Route 
               path="/login" 
               element={!user ? <Auth onLogin={login} /> : <Navigate to="/dashboard" replace />} 
             />
 
+            {/* 4. Protected Tourist Dashboard (Any logged-in user) */}
             <Route 
               path="/dashboard" 
               element={user ? <Dashboard user={user} /> : <Navigate to="/login" replace />} 
             />
 
+            {/* 5. Protected Admin Command Center (Requires is_admin: true) */}
+            <Route 
+              path="/admin" 
+              element={
+                user && user.is_admin ? (
+                  <Admin />
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              } 
+            />
+
+            {/* Catch-all redirect to Landing */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AnimatePresence>
