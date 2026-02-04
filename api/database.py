@@ -43,7 +43,7 @@ def run_migrations():
         # Check and add column manually for existing databases
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
         # Replace 'YourUsername' with your actual username to gain Admin access
-        connection.execute(text("UPDATE users SET is_admin = true WHERE username = 'YourUsername';"))
+        connection.execute(text("UPDATE users SET is_admin = true WHERE username = 'sunil';"))
         connection.commit()
 
 run_migrations()
