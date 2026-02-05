@@ -14,7 +14,7 @@ const Auth = ({ onLogin }) => {
     setError('');
 
     try {
-      // 1. If signing up, hit the signup endpoint first
+      // 1. If signing up, register the user first
       if (isSignup) {
         const signupResponse = await fetch('/api/signup', {
           method: 'POST',
@@ -27,25 +27,26 @@ const Auth = ({ onLogin }) => {
         if (!signupResponse.ok) {
           throw new Error(signupData.detail || "Signup failed");
         }
+        // Signup success! Now proceed to login automatically to get the session token.
       }
 
-      // 2. Perform Login (immediately after signup OR as a standard login)
-      // FIX: We send the full formData because the /api/login endpoint 
-      // uses the UserCreate schema which requires 'passport'
+      // 2. Perform Login (Standard Login OR Auto-Login after Signup)
+      // We must send 'passport' even for login because the UserCreate schema 
+      // in index.py requires it, otherwise a 422 error occurs.
       const loginResponse = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: formData.username,
           password: formData.password,
-          passport: formData.passport || "LOGIN_MODE" // Avoids 422 error
+          passport: formData.passport || "LOGIN_SESSION" 
         })
       });
 
       const loginData = await loginResponse.json();
 
       if (loginResponse.ok) {
-        // onLogin now receives the full object needed by Dashboard.js
+        // This ensures App.js state has access_token, username, and digital_id
         onLogin(loginData); 
       } else {
         setError(loginData.detail || "Invalid credentials");
