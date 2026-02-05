@@ -11,19 +11,49 @@ const Auth = ({ onLogin }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const endpoint = isSignup ? '/api/signup' : '/api/login';
+    setError('');
+
     try {
-      const response = await fetch(endpoint, {
+      if (isSignup) {
+        // Step 1: Register the user
+        const signupResponse = await fetch('/api/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formData)
+        });
+        
+        const signupData = await signupResponse.json();
+        
+        if (!signupResponse.ok) {
+          throw new Error(signupData.detail || "Signup failed");
+        }
+        // If signup is successful, we continue to the login step below
+      }
+
+      // Step 2: Login (either directly or automatically after signup)
+      // This ensures we get the access_token and full user profile
+      const loginResponse = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify({
+          username: formData.username,
+          password: formData.password
+        })
       });
-      const data = await response.json();
-      if (response.ok) onLogin(data);
-      else setError(data.detail || "Error occurred");
+
+      const loginData = await loginResponse.json();
+
+      if (loginResponse.ok) {
+        // Now onLogin gets the full object: {access_token, username, digital_id, is_admin}
+        onLogin(loginData); 
+      } else {
+        setError(loginData.detail || "Login failed");
+      }
     } catch (err) {
-      setError("Connection error");
-    } finally { setLoading(false); }
+      setError(err.message || "Connection error");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -36,13 +66,14 @@ const Auth = ({ onLogin }) => {
       >
         <div className="auth-card-inner">
           <div className="text-center">
-            {/* Logo placeholder matching the balloon icon shape */}
             <div className="app-logo-box">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="white">
                 <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
               </svg>
             </div>
-            <h3 className="fw-bold text-dark">Login To Your Account</h3>
+            <h3 className="fw-bold text-dark">
+              {isSignup ? "Create Account" : "Login To Your Account"}
+            </h3>
             <p className="text-muted small">Please enter details below</p>
           </div>
 
@@ -55,6 +86,7 @@ const Auth = ({ onLogin }) => {
                 className="form-control-custom"
                 type="text" 
                 placeholder="Username"
+                value={formData.username}
                 onChange={(e) => setFormData({...formData, username: e.target.value})}
                 required
               />
@@ -66,6 +98,7 @@ const Auth = ({ onLogin }) => {
                 className="form-control-custom"
                 type="password" 
                 placeholder="Password"
+                value={formData.password}
                 onChange={(e) => setFormData({...formData, password: e.target.value})}
                 required
               />
@@ -78,7 +111,9 @@ const Auth = ({ onLogin }) => {
                   className="form-control-custom"
                   type="text" 
                   placeholder="ID Number"
+                  value={formData.passport}
                   onChange={(e) => setFormData({...formData, passport: e.target.value})}
+                  required={isSignup}
                 />
               </Form.Group>
             )}
@@ -88,7 +123,15 @@ const Auth = ({ onLogin }) => {
             </Button>
 
             <div className="text-center mt-3">
-              <Button variant="link" size="sm" className="text-muted text-decoration-none" onClick={() => setIsSignup(!isSignup)}>
+              <Button 
+                variant="link" 
+                size="sm" 
+                className="text-muted text-decoration-none" 
+                onClick={() => {
+                  setIsSignup(!isSignup);
+                  setError('');
+                }}
+              >
                 {isSignup ? "Have an account? Sign In" : "New tourist? Sign Up"}
               </Button>
             </div>
