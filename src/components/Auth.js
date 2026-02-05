@@ -14,12 +14,12 @@ const Auth = ({ onLogin }) => {
     setError('');
 
     try {
+      // 1. If signing up, hit the signup endpoint first
       if (isSignup) {
-        // Step 1: Register the user
         const signupResponse = await fetch('/api/signup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData)
+          body: JSON.stringify(formData) // Sends username, password, passport
         });
         
         const signupData = await signupResponse.json();
@@ -27,27 +27,28 @@ const Auth = ({ onLogin }) => {
         if (!signupResponse.ok) {
           throw new Error(signupData.detail || "Signup failed");
         }
-        // If signup is successful, we continue to the login step below
       }
 
-      // Step 2: Login (either directly or automatically after signup)
-      // This ensures we get the access_token and full user profile
+      // 2. Perform Login (immediately after signup OR as a standard login)
+      // FIX: We send the full formData because the /api/login endpoint 
+      // uses the UserCreate schema which requires 'passport'
       const loginResponse = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: formData.username,
-          password: formData.password
+          password: formData.password,
+          passport: formData.passport || "LOGIN_MODE" // Avoids 422 error
         })
       });
 
       const loginData = await loginResponse.json();
 
       if (loginResponse.ok) {
-        // Now onLogin gets the full object: {access_token, username, digital_id, is_admin}
+        // onLogin now receives the full object needed by Dashboard.js
         onLogin(loginData); 
       } else {
-        setError(loginData.detail || "Login failed");
+        setError(loginData.detail || "Invalid credentials");
       }
     } catch (err) {
       setError(err.message || "Connection error");
