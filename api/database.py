@@ -39,7 +39,7 @@ class Place(Base):
 def run_migrations():
     with engine.connect() as connection:
         connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
-        connection.execute(text("UPDATE users SET is_admin = true WHERE username = 'sunil';"))
+        connection.execute(text("UPDATE users SET is_admin = true WHERE username = 'lubnaalmas';"))
         connection.commit()
 
 run_migrations()
