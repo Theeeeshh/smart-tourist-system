@@ -150,7 +150,16 @@ const Admin = () => {
                         {t.username} <Badge bg={t.is_online ? "success" : "secondary"} pill className="ms-1">.</Badge>
                       </td>
                       <td>
-                        <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/tourist-location/${t.username}`, {method: 'DELETE'}).then(fetchData)}>
+                        <Button 
+                          variant="link" 
+                          className="text-danger p-0" 
+                          onClick={() => {
+                            if (window.confirm(`Permanently delete ${t.username} and stop all tracking?`)) {
+                              fetch(`/api/admin/users/${t.id}`, { method: 'DELETE' })
+                                .then(() => fetchData());
+                            }
+                          }}
+                        >
                           <Trash2 size={16}/>
                         </Button>
                       </td>

@@ -226,3 +226,21 @@ def delete_place(place_id: int, db: Session = Depends(get_db)):
         db.delete(db_place)
         db.commit()
     return {"message": "Place deleted successfully"}
+# --- ADMIN: PERMANENT USER DELETION & TRACE CLEARING ---
+
+@app.delete("/api/admin/users/{user_id}")
+def delete_user_permanently(user_id: int, db: Session = Depends(get_db)):
+    """Deletes a user from the DB and ensures Redis stops tracking them."""
+    # 1. Find the user in PostgreSQL
+    db_user = db.query(User).filter(User.id == user_id).first()
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # 2. Kill the Redis trace immediately so tracking stops
+    r.delete(f"live_loc:{db_user.username}")
+    
+    # 3. Delete the user from the database
+    db.delete(db_user)
+    db.commit()
+    
+    return {"message": f"User {db_user.username} and their location traces were deleted."}
