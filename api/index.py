@@ -72,6 +72,32 @@ def get_db():
 def create_digital_id(passport: str):
     """Generates a unique Digital ID based on passport info."""
     return "DID_" + hashlib.sha256(passport.encode()).hexdigest()[:12].upper()
+def get_safety_status(lat, lng, db: Session):
+    """
+    Scans all zones and returns the highest risk category the user is currently in.
+    """
+    zones = db.query(SafeZone).all()
+    current_status = "Scanning Area..."
+    alert_level = "success" # Default Green
+
+    for zone in zones:
+        # Distance calculation in meters (approximate)
+        # Using 111,000 meters per degree for quick local calculation
+        distance = math.sqrt((lat - zone.lat)**2 + (lng - zone.lng)**2) * 111000
+        
+        if distance <= zone.radius:
+            # Check for classification
+            if zone.category == "High Danger":
+                return f"CRITICAL ALERT: {zone.name} (High Danger Zone)", "danger"
+            elif zone.category == "Danger":
+                # We don't return immediately so a 'High Danger' check can override this
+                current_status = f"WARNING: Entering {zone.name} (Danger Zone)"
+                alert_level = "warning"
+            elif zone.category == "Safe" and alert_level != "warning":
+                current_status = f"Inside Safe Zone: {zone.name}"
+                alert_level = "success"
+
+    return current_status, alert_level
 
 # --- AUTHENTICATION ENDPOINTS ---
 
@@ -113,40 +139,23 @@ def login(user: UserCreate, db: Session = Depends(get_db)):
 @app.post("/api/update-location")
 def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == loc.username).first()
-    
-    # 1. Update user location in DB
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 1. Update User's coordinates in the Database
     db_user.last_lat, db_user.last_lng = loc.lat, loc.lng
     db.commit()
 
-    # 2. Identify region for Emergency Contacts
-    # Simple bounding box for Ooty vs Kerala
-    region = "Kerala" if 8.0 < loc.lat < 10.5 else "Ooty" if 11.0 < loc.lat < 11.5 else "Default"
+    # 2. Run Geofencing Check
+    status, alert_level = get_safety_status(loc.lat, loc.lng, db)
 
-    # 3. Check for Zone Entry/Alerts
-    all_zones = db.query(SafeZone).all()
-    status_msg = "You are in a monitored area"
-    alert_level = "success" # Default green
-
-    for zone in all_zones:
-        # Distance calculation (approximate meters)
-        distance = math.sqrt((loc.lat - zone.lat)**2 + (loc.lng - zone.lng)**2) * 111000
-        if distance <= zone.radius:
-            if zone.category == "High Danger":
-                status_msg = f"CRITICAL: Entering {zone.name} (High Risk Area!)"
-                alert_level = "danger" # Red
-            elif zone.category == "Danger":
-                status_msg = f"WARNING: {zone.name} is a Danger Zone. Stay alert."
-                alert_level = "warning" # Yellow
-            else:
-                status_msg = f"Safe Zone: {zone.name}"
-                alert_level = "success" # Green
-            break
-
+    # Note: Emergency Contacts are NOT returned here because 
+    # the frontend handles them via Nominatim API.
     return {
-        "status": status_msg,
+        "status": status,
         "alert_level": alert_level,
-        "region": region,
-        "contacts": EMERGENCY_CONTACTS.get(region)
+        "lat": loc.lat,
+        "lng": loc.lng
     }
 # --- ADMIN: TOURIST MANAGEMENT ---
 
