@@ -20,7 +20,11 @@ from typing import List, Optional
 from .database import SessionLocal, User, pwd_context, SafeZone, Place
 
 app = FastAPI()
-SAFE_API_URL = "https://test.api.amadeus.com/v1/safety/safety-rated-locations"
+HF_SPACE_ID = "sunil0034/rakshasetu-ai-engine" 
+HF_API_URL = f"https://{HF_SPACE_ID.replace('/', '-')}.hf.space/gradio_api/call/predict"
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 # --- REDIS CONNECTION SETUP ---
 # Detects Vercel KV or Upstash Redis URL provided by Vercel Environment Variables
 REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
@@ -82,45 +86,8 @@ def get_db():
 def create_digital_id(passport: str):
     """Generates a unique Digital ID based on passport info."""
     return "DID_" + hashlib.sha256(passport.encode()).hexdigest()[:12].upper()
-def get_safety_status(lat, lng, db: Session):
-    """
-    Scans all zones and returns the highest risk category the user is currently in.
-    """
-    zones = db.query(SafeZone).all()
-    current_status = "Scanning Area..."
-    alert_level = "success" # Default Green
 
-    for zone in zones:
-        # Distance calculation in meters (approximate)
-        # Using 111,000 meters per degree for quick local calculation
-        distance = math.sqrt((lat - zone.lat)**2 + (lng - zone.lng)**2) * 111000
-        
-        if distance <= zone.radius:
-            # Check for classification
-            if zone.category == "High Danger":
-                return f"CRITICAL ALERT: {zone.name} (High Danger Zone)", "danger"
-            elif zone.category == "Danger":
-                # We don't return immediately so a 'High Danger' check can override this
-                current_status = f"WARNING: Entering {zone.name} (Danger Zone)"
-                alert_level = "warning"
-            elif zone.category == "Safe" and alert_level != "warning":
-                current_status = f"Inside Safe Zone: {zone.name}"
-                alert_level = "success"
 
-    return current_status, alert_level
-async def get_amadeus_token():
-    """Fetches a fresh OAuth2 token from Amadeus."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://test.api.amadeus.com/v1/security/oauth2/token",
-            data={
-                "grant_type": "client_credentials",
-                "client_id": os.getenv("AMADEUS_KEY"),
-                "client_secret": os.getenv("AMADEUS_SECRET"),
-            },
-        )
-        data = response.json()
-        return data.get("access_token")
 
 # --- AUTHENTICATION ENDPOINTS ---
 
@@ -244,8 +211,8 @@ def get_places(db: Session = Depends(get_db)):
     return db.query(Place).all()
 
 @app.post("/api/admin/places")
-async def add_place_with_ai_and_google_zones(place: dict, db: Session = Depends(get_db)):
-    # 1. Save the main destination
+async def add_place_with_remote_ai(place: dict, db: Session = Depends(get_db)):
+    # 1. Save the primary Place to PostgreSQL
     new_place = Place(
         name=place['name'], 
         city=place['city'], 
@@ -253,85 +220,87 @@ async def add_place_with_ai_and_google_zones(place: dict, db: Session = Depends(
         details=place['details']
     )
     db.add(new_place)
-    db.flush() 
+    db.flush() # Get ID for relationships if needed
     
     lat, lng = place.get('lat'), place.get('lng')
     
-    # 2. AI PREDICTION for Center
-    primary_category = "Safe" 
-    if model and type_encoder:
-        try:
-            type_idx = type_encoder.transform([place['type']])[0]
-            features = np.array([[type_idx, float(place['rating']), float(place['fee'])]])
-            prediction = model.predict(features)[0]
-            categories_map = {0: "Safe", 1: "Danger", 2: "High Danger"}
-            primary_category = categories_map.get(prediction, "Safe")
-        except Exception as e:
-            print(f"AI Inference Error: {e}")
+    # 2. CALL HUGGING FACE AI ENGINE
+    category = "Safe" # Default fallback
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # Send data to Hugging Face
+            # Ensure the order matches your Gradio app.py inputs: [type, rating, fee]
+            response = await client.post(HF_API_URL, json={
+                "data": [place['type'], float(place['rating']), float(place['fee'])]
+            })
+            
+            if response.status_code == 200:
+                event_id = response.json().get("event_id")
+                # Gradio uses server-sent events or polling; we poll the result endpoint
+                result_url = f"{HF_API_URL}/{event_id}"
+                
+                # We wait a brief moment for the AI to process
+                await asyncio.sleep(0.5) 
+                result_res = await client.get(result_url)
+                
+                # Gradio response parsing (data is typically in a list)
+                prediction_data = result_res.json()
+                # Note: Adjust index based on your Gradio output
+                prediction = prediction_data.get('data', [0])[0] 
+                
+                categories_map = {0: "Safe", 1: "Danger", 2: "High Danger"}
+                category = categories_map.get(int(prediction), "Safe")
+    except Exception as e:
+        print(f"Hugging Face API Error: {e}")
 
+    # 3. Save the AI-determined Primary Zone
     db.add(SafeZone(
         name=f"AI PROFILE: {place['name']}",
         lat=lat, lng=lng, radius=1000,
-        category=primary_category
+        category=category
     ))
 
-    # 3. GOOGLE PLACES: Balanced Zone Generation
+    # 4. GOOGLE PLACES: Generate surrounding Safe/Danger/Neutral zones
     if lat and lng and GOOGLE_API_KEY:
         async with httpx.AsyncClient() as client:
-            target_types = "police|hospital|liquor_store|night_club|bar|park|cafe"
-            response = await client.get(
-                f"{SEARCH_URL}?location={lat},{lng}&radius=4000&type={target_types}&key={GOOGLE_API_KEY}"
+            target_types = "police|hospital|liquor_store|night_club|bar|bank"
+            g_res = await client.get(
+                f"{GOOGLE_SEARCH_URL}?location={lat},{lng}&radius=4000&type={target_types}&key={GOOGLE_API_KEY}"
             )
             
-            if response.status_code == 200:
-                results = response.json().get('results', [])
+            if g_res.status_code == 200:
+                results = g_res.json().get('results', [])
                 
-                # Tracking counters to hit your "2-3 zones per category" requirement
+                # Logic to add 2-3 of each as requested
                 counts = {"Safe": 0, "Danger": 0, "High Danger": 0}
-                limit = 3 # Max 3 per specific category, rest become Neutral
+                limit = 3
 
                 for item in results:
                     poi_types = item.get('types', [])
                     poi_name = item['name']
-                    item_lat = item['geometry']['location']['lat']
-                    item_lng = item['geometry']['location']['lng']
                     
-                    # Logic to determine the "potential" category
                     if any(t in poi_types for t in ["police", "hospital"]) and counts["Safe"] < limit:
-                        cat = "Safe"
-                        prefix = "SAFE HUB"
-                        radius = 500
+                        cat, rad, prefix = "Safe", 500, "SAFE HUB"
                         counts["Safe"] += 1
                     elif "night_club" in poi_types and counts["High Danger"] < limit:
-                        cat = "High Danger"
-                        prefix = "CRITICAL"
-                        radius = 300
+                        cat, rad, prefix = "High Danger", 300, "CRITICAL"
                         counts["High Danger"] += 1
                     elif any(t in poi_types for t in ["liquor_store", "bar"]) and counts["Danger"] < limit:
-                        cat = "Danger"
-                        prefix = "CAUTION"
-                        radius = 400
+                        cat, rad, prefix = "Danger", 400, "CAUTION"
                         counts["Danger"] += 1
                     else:
-                        # EVERYTHING ELSE MARKED AS NEUTRAL
-                        cat = "Neutral"
-                        prefix = "ZONE"
-                        radius = 450
+                        cat, rad, prefix = "Neutral", 450, "ZONE"
 
                     db.add(SafeZone(
                         name=f"{prefix}: {poi_name}",
-                        lat=item_lat,
-                        lng=item_lng,
-                        radius=radius,
+                        lat=item['geometry']['location']['lat'],
+                        lng=item['geometry']['location']['lng'],
+                        radius=rad,
                         category=cat
                     ))
 
     db.commit()
-    return {
-        "message": f"Place added. AI classified as {primary_category}.",
-        "stats": counts
-    }
-
+    return {"message": f"Place added. AI Category: {category}", "zones_added": len(results)}
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):
     db_place = db.query(Place).filter(Place.id == place_id).first()
