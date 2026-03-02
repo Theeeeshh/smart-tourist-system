@@ -47,36 +47,54 @@ const Admin = () => {
   const [safeZones, setSafeZones] = useState([]);
   const [places, setPlaces] = useState([]);
   
-  const [newPlace, setNewPlace] = useState({ name: '', city: '', img: '', details: '' });
+  // Updated newPlace state to include lat/lng for backend auto-discovery
+  const [newPlace, setNewPlace] = useState({ 
+    name: '', city: '', img: '', details: '', lat: '', lng: '' 
+  });
   const [editPlace, setEditPlace] = useState(null);
   
   const [newZone, setNewZone] = useState({ name: '', lat: '', lng: '', radius: '' });
   const [editZone, setEditZone] = useState(null);
 
-  const fetchData = async () => {
+  const fetchData = async (signal) => {
     try {
-      const tRes = await fetch('/api/admin/tourists');
-      setTourists(await tRes.json());
-      const zRes = await fetch('/api/admin/safe-zones');
-      setSafeZones(await zRes.json());
-      const pRes = await fetch('/api/places');
-      setPlaces(await pRes.json());
-    } catch (err) { console.error("Fetch error:", err); }
+      const [tRes, zRes, pRes] = await Promise.all([
+        fetch('/api/admin/tourists', { signal }),
+        fetch('/api/admin/safe-zones', { signal }),
+        fetch('/api/places', { signal })
+      ]);
+
+      if (tRes.ok) setTourists(await tRes.json());
+      if (zRes.ok) setSafeZones(await zRes.json());
+      if (pRes.ok) setPlaces(await pRes.json());
+    } catch (err) { 
+      if (err.name !== 'AbortError') console.error("Fetch error:", err); 
+    }
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    const interval = setInterval(() => fetchData(controller.signal), 10000); // Increased to 10s to prevent 'Resource Busy'
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
   }, []);
 
   const handleMapClick = (lat, lng) => {
     const formattedLat = lat.toFixed(6);
     const formattedLng = lng.toFixed(6);
+    
+    // Logic to decide which form to fill based on what the admin is doing
     if (editZone) {
       setEditZone({ ...editZone, lat: formattedLat, lng: formattedLng });
-    } else {
+    } else if (editPlace) {
+      setEditPlace({ ...editPlace, lat: formattedLat, lng: formattedLng });
+    } else if (newZone.name !== '') {
       setNewZone({ ...newZone, lat: formattedLat, lng: formattedLng });
+    } else {
+      setNewPlace({ ...newPlace, lat: formattedLat, lng: formattedLng });
     }
   };
 
@@ -84,13 +102,25 @@ const Admin = () => {
     e.preventDefault();
     const method = editPlace ? 'PUT' : 'POST';
     const url = editPlace ? `/api/admin/places/${editPlace.id}` : '/api/admin/places';
+    
+    // Convert string coordinates to floats for the backend
+    const payload = editPlace ? {
+        ...editPlace,
+        lat: parseFloat(editPlace.lat),
+        lng: parseFloat(editPlace.lng)
+    } : {
+        ...newPlace,
+        lat: parseFloat(newPlace.lat),
+        lng: parseFloat(newPlace.lng)
+    };
+
     await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editPlace || newPlace)
+      body: JSON.stringify(payload)
     });
     setEditPlace(null);
-    setNewPlace({ name: '', city: '', img: '', details: '' });
+    setNewPlace({ name: '', city: '', img: '', details: '', lat: '', lng: '' });
     fetchData();
   };
 
@@ -98,10 +128,23 @@ const Admin = () => {
     e.preventDefault();
     const method = editZone ? 'PUT' : 'POST';
     const url = editZone ? `/api/admin/safe-zones/${editZone.id}` : '/api/admin/safe-zones';
+    
+    const payload = editZone ? {
+        ...editZone,
+        lat: parseFloat(editZone.lat),
+        lng: parseFloat(editZone.lng),
+        radius: parseFloat(editZone.radius)
+    } : {
+        ...newZone,
+        lat: parseFloat(newZone.lat),
+        lng: parseFloat(newZone.lng),
+        radius: parseFloat(newZone.radius)
+    };
+
     await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editZone || newZone)
+      body: JSON.stringify(payload)
     });
     setEditZone(null);
     setNewZone({ name: '', lat: '', lng: '', radius: '' });
@@ -132,7 +175,7 @@ const Admin = () => {
               ))}
             </MapContainer>
             <div className="bg-light p-2 text-center small text-muted border-top">
-              Tap the map or enter coordinates manually below.
+              Tap the map to select coordinates for Places or Geofences.
             </div>
           </div>
         </Col>
@@ -154,7 +197,7 @@ const Admin = () => {
                           variant="link" 
                           className="text-danger p-0" 
                           onClick={() => {
-                            if (window.confirm(`Permanently delete ${t.username} and stop all tracking?`)) {
+                            if (window.confirm(`Permanently delete ${t.username}?`)) {
                               fetch(`/api/admin/users/${t.id}`, { method: 'DELETE' })
                                 .then(() => fetchData());
                             }
@@ -172,7 +215,7 @@ const Admin = () => {
         </Col>
       </Row>
 
-      {/* PLACES MANAGEMENT */}
+      {/* PLACES MANAGEMENT - Updated with Lat/Lng for Auto-Discovery */}
       <Row className="g-4 mb-5">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
@@ -180,10 +223,23 @@ const Admin = () => {
             <Form onSubmit={handlePlaceSubmit}>
               <Form.Control className="mb-2" placeholder="Name" value={editPlace ? editPlace.name : newPlace.name} onChange={e => editPlace ? setEditPlace({...editPlace, name: e.target.value}) : setNewPlace({...newPlace, name: e.target.value})} required />
               <Form.Control className="mb-2" placeholder="City" value={editPlace ? editPlace.city : newPlace.city} onChange={e => editPlace ? setEditPlace({...editPlace, city: e.target.value}) : setNewPlace({...newPlace, city: e.target.value})} required />
+              
+              <Row className="mb-2">
+                <Col>
+                  <Form.Control placeholder="Lat" type="number" step="any" value={editPlace ? editPlace.lat : newPlace.lat} onChange={e => editPlace ? setEditPlace({...editPlace, lat: e.target.value}) : setNewPlace({...newPlace, lat: e.target.value})} required />
+                </Col>
+                <Col>
+                  <Form.Control placeholder="Lng" type="number" step="any" value={editPlace ? editPlace.lng : newPlace.lng} onChange={e => editPlace ? setEditPlace({...editPlace, lng: e.target.value}) : setNewPlace({...newPlace, lng: e.target.value})} required />
+                </Col>
+              </Row>
+
               <Form.Control className="mb-2" placeholder="Image URL" value={editPlace ? editPlace.img : newPlace.img} onChange={e => editPlace ? setEditPlace({...editPlace, img: e.target.value}) : setNewPlace({...newPlace, img: e.target.value})} required />
               <Form.Control as="textarea" rows={2} className="mb-3" placeholder="Details" value={editPlace ? editPlace.details : newPlace.details} onChange={e => editPlace ? setEditPlace({...editPlace, details: e.target.value}) : setNewPlace({...newPlace, details: e.target.value})} required />
-              <Button type="submit" className="w-100 btn-pill-gradient border-0">{editPlace ? 'Update Destination' : 'Publish Destination'}</Button>
-              {editPlace && <Button variant="link" className="w-100 mt-1 text-secondary" onClick={() => { setEditPlace(null); setNewPlace({name:'', city:'', img:'', details:''}); }}>Cancel Update</Button>}
+              
+              <Button type="submit" className="w-100 btn-pill-gradient border-0">
+                {editPlace ? 'Update Destination' : 'Publish & Auto-Generate Safe Zones'}
+              </Button>
+              {editPlace && <Button variant="link" className="w-100 mt-1 text-secondary" onClick={() => { setEditPlace(null); setNewPlace({name:'', city:'', img:'', details:'', lat:'', lng:''}); }}>Cancel Update</Button>}
             </Form>
           </div>
         </Col>
@@ -209,7 +265,7 @@ const Admin = () => {
         </Col>
       </Row>
 
-      {/* SAFE ZONE MANAGEMENT - MANUAL UPDATE ENABLED */}
+      {/* SAFE ZONE MANAGEMENT */}
       <Row className="g-4">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
@@ -218,26 +274,10 @@ const Admin = () => {
               <Form.Control className="mb-2" placeholder="Zone Name" value={editZone ? editZone.name : newZone.name} onChange={e => editZone ? setEditZone({...editZone, name: e.target.value}) : setNewZone({...newZone, name: e.target.value})} required />
               <Row>
                 <Col>
-                  <Form.Control 
-                    className="mb-2" 
-                    placeholder="Lat" 
-                    type="number" 
-                    step="any" 
-                    value={editZone ? editZone.lat : newZone.lat} 
-                    onChange={e => editZone ? setEditZone({...editZone, lat: e.target.value}) : setNewZone({...newZone, lat: e.target.value})} 
-                    required 
-                  />
+                  <Form.Control className="mb-2" placeholder="Lat" type="number" step="any" value={editZone ? editZone.lat : newZone.lat} onChange={e => editZone ? setEditZone({...editZone, lat: e.target.value}) : setNewZone({...newZone, lat: e.target.value})} required />
                 </Col>
                 <Col>
-                  <Form.Control 
-                    className="mb-2" 
-                    placeholder="Lng" 
-                    type="number" 
-                    step="any" 
-                    value={editZone ? editZone.lng : newZone.lng} 
-                    onChange={e => editZone ? setEditZone({...editZone, lng: e.target.value}) : setNewZone({...newZone, lng: e.target.value})} 
-                    required 
-                  />
+                  <Form.Control className="mb-2" placeholder="Lng" type="number" step="any" value={editZone ? editZone.lng : newZone.lng} onChange={e => editZone ? setEditZone({...editZone, lng: e.target.value}) : setNewZone({...newZone, lng: e.target.value})} required />
                 </Col>
               </Row>
               <Form.Control className="mb-3" placeholder="Radius (meters)" type="number" value={editZone ? editZone.radius : newZone.radius} onChange={e => editZone ? setEditZone({...editZone, radius: e.target.value}) : setNewZone({...newZone, radius: e.target.value})} required />
