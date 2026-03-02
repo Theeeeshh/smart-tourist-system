@@ -1,20 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Container, Row, Col, Table, Form, Button, Badge, InputGroup, Spinner } from 'react-bootstrap';
+import { Container, Row, Col, Table, Form, Button, Badge, InputGroup, Spinner, Card, Modal } from 'react-bootstrap';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents, useMap } from 'react-leaflet';
-import { Users, MapPin, ShieldAlert, Search, Target } from 'lucide-react';
+import { Users, MapPin, ShieldAlert, Trash2, Edit, Search, Target, Plus } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// Fix for default Leaflet marker icons breaking in React
+// Leaflet Icon Fix
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-
-let DefaultIcon = L.icon({
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41]
-});
+let DefaultIcon = L.icon({ iconUrl: markerIcon, shadowUrl: markerShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
 L.Marker.prototype.options.icon = DefaultIcon;
 
 function MapPanTo({ target }) {
@@ -28,11 +22,7 @@ function MapPanTo({ target }) {
 }
 
 function MapClickHandler({ onMapClick }) {
-  useMapEvents({
-    click: (e) => {
-      onMapClick(e.latlng.lat, e.latlng.lng);
-    },
-  });
+  useMapEvents({ click: (e) => onMapClick(e.latlng.lat, e.latlng.lng) });
   return null;
 }
 
@@ -46,6 +36,12 @@ const Admin = () => {
   const [zoneSearch, setZoneSearch] = useState("");
   const [placeSearch, setPlaceSearch] = useState("");
 
+  // CRUD States
+  const [newPlace, setNewPlace] = useState({ name: '', city: '', img: '', details: '', lat: '', lng: '', type: 'Temple', rating: 4.5, fee: 0 });
+  const [editPlace, setEditPlace] = useState(null);
+  const [newZone, setNewZone] = useState({ name: '', lat: '', lng: '', radius: '', category: 'Safe' });
+  const [editZone, setEditZone] = useState(null);
+
   const isFirstRun = useRef(true);
 
   const fetchData = async (signal) => {
@@ -56,19 +52,13 @@ const Admin = () => {
         fetch('/api/admin/safe-zones', { signal }),
         fetch('/api/places', { signal })
       ]);
-      
       if (tRes.ok && zRes.ok && pRes.ok) {
         setTourists(await tRes.json());
         setSafeZones(await zRes.json());
         setPlaces(await pRes.json());
       }
-    } catch (err) { 
-      if (err.name !== 'AbortError') console.error("Fetch error:", err); 
-    } finally {
-      setInitialLoading(false);
-      setIsRefreshing(false);
-      isFirstRun.current = false;
-    }
+    } catch (err) { if (err.name !== 'AbortError') console.error(err); }
+    finally { setInitialLoading(false); setIsRefreshing(false); isFirstRun.current = false; }
   };
 
   useEffect(() => {
@@ -79,152 +69,136 @@ const Admin = () => {
   }, []);
 
   const handleMapClick = (lat, lng) => {
-    const formattedLat = lat.toFixed(6);
-    const formattedLng = lng.toFixed(6);
-    // Add logic here for setting newZone or newPlace coordinates if needed
+    const fLat = lat.toFixed(6);
+    const fLng = lng.toFixed(6);
+    if (editZone) setEditZone({ ...editZone, lat: fLat, lng: fLng });
+    else if (editPlace) setEditPlace({ ...editPlace, lat: fLat, lng: fLng });
+    else if (newZone.name !== '') setNewZone({ ...newZone, lat: fLat, lng: fLng });
+    else setNewPlace({ ...newPlace, lat: fLat, lng: fLng });
   };
 
-  const filteredZones = useMemo(() => 
-    (safeZones || []).filter(z => z.name?.toLowerCase().includes(zoneSearch.toLowerCase())),
-    [safeZones, zoneSearch]
-  );
+  const handlePlaceSubmit = async (e) => {
+    e.preventDefault();
+    const method = editPlace ? 'PUT' : 'POST';
+    const url = editPlace ? `/api/admin/places/${editPlace.id}` : '/api/admin/places';
+    await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editPlace || newPlace)
+    });
+    setEditPlace(null);
+    setNewPlace({ name: '', city: '', img: '', details: '', lat: '', lng: '', type: 'Temple', rating: 4.5, fee: 0 });
+    fetchData();
+  };
 
-  const filteredPlaces = useMemo(() => 
-    (places || []).filter(p => p.name?.toLowerCase().includes(placeSearch.toLowerCase())),
-    [places, placeSearch]
-  );
+  const handleDelete = async (type, id) => {
+    if (!window.confirm("Are you sure?")) return;
+    await fetch(`/api/admin/${type}/${id}`, { method: 'DELETE' });
+    fetchData();
+  };
 
   const stats = useMemo(() => ({
     danger: (tourists || []).filter(t => t.is_online && t.current_status?.toLowerCase().includes("danger")).length,
     normal: (tourists || []).filter(t => t.is_online && !t.current_status?.toLowerCase().includes("danger")).length
   }), [tourists]);
 
-  if (initialLoading) {
-    return (
-      <Container className="d-flex justify-content-center align-items-center" style={{height: '80vh'}}>
-        <div className="text-center">
-          <Spinner animation="grow" variant="primary" />
-          <p className="mt-3 fw-bold text-primary">RakshaSetu: Secure Link Established...</p>
-        </div>
-      </Container>
-    );
-  }
+  if (initialLoading) return (
+    <Container className="d-flex justify-content-center align-items-center" style={{height: '80vh'}}>
+      <Spinner animation="grow" variant="primary" /><p className="ms-3 fw-bold">RakshaSetu Booting...</p>
+    </Container>
+  );
 
   return (
-    <Container className="py-5">
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <div>
-          <h2 className="fw-bold text-dark m-0">RakshaSetu Command Center</h2>
-          {isRefreshing && <small className="text-muted">Updating live feed...</small>}
-        </div>
-        <div className="d-flex gap-3">
-            <Badge bg="danger" className="p-2 px-3 shadow-sm fs-6">In Danger: {stats.danger}</Badge>
-            <Badge bg="success" className="p-2 px-3 shadow-sm fs-6">Normal: {stats.normal}</Badge>
+    <Container className="py-4">
+      <div className="d-flex justify-content-between mb-4">
+        <h2 className="fw-bold">🚀 Command Center</h2>
+        <div className="d-flex gap-2">
+          <Badge bg="danger">Danger: {stats.danger}</Badge>
+          <Badge bg="success">Normal: {stats.normal}</Badge>
         </div>
       </div>
-      
-      <Row className="g-4 mb-5">
+
+      <Row className="mb-4 g-3">
         <Col lg={8}>
-          <div className="bg-white shadow-sm p-0 overflow-hidden" style={{ height: '450px', position: 'relative', borderRadius: '15px', border: '1px solid #ddd' }}>
-            <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: '100%', width: '100%' }}>
+          <Card className="shadow-sm overflow-hidden" style={{ height: '450px' }}>
+            <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: '100%' }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               <MapPanTo target={mapTarget} />
               <MapClickHandler onMapClick={handleMapClick} />
-              {tourists?.map(t => t.last_lat && (
+              {tourists.map(t => t.last_lat && (
                 <Marker key={t.id} position={[t.last_lat, t.last_lng]}>
-                  <Popup><strong>{t.username}</strong><br/>Status: {t.current_status || "Safe"}</Popup>
+                  <Popup>{t.username} - {t.current_status}</Popup>
                 </Marker>
               ))}
-              {safeZones?.map(zone => (
-                <Circle 
-                  key={zone.id} center={[zone.lat, zone.lng]} radius={zone.radius} 
-                  pathOptions={{ 
-                    color: zone.category === "Danger" ? 'red' : 'green',
-                    fillColor: zone.category === "Danger" ? 'red' : 'green',
-                    fillOpacity: 0.3 
-                  }} 
-                />
+              {safeZones.map(z => (
+                <Circle key={z.id} center={[z.lat, z.lng]} radius={z.radius} pathOptions={{ color: z.category === 'Danger' ? 'red' : 'green' }} />
               ))}
             </MapContainer>
-          </div>
+          </Card>
         </Col>
-
+        
+        {/* ADD PLACE FORM */}
         <Col lg={4}>
-          <div className="bg-white h-100 shadow-sm p-3 border" style={{ borderRadius: '15px' }}>
-            <h5 className="fw-bold mb-3"><Users size={20} className="me-2 text-primary"/>Active Tourists</h5>
-            <div style={{ maxHeight: '350px', overflowY: 'auto' }}>
-              <Table hover size="sm">
-                <thead className="table-light"><tr><th>User</th><th>Track</th></tr></thead>
-                <tbody>
-                  {tourists.map(t => (
-                    <tr key={t.id}>
-                      <td>{t.username}</td>
-                      <td>
-                        <Button variant="outline-primary" size="sm" onClick={() => setMapTarget({lat: t.last_lat, lng: t.last_lng})}>
-                          <Target size={14}/>
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </div>
-          </div>
+          <Card className="shadow-sm p-3 h-100">
+            <h5 className="fw-bold"><Plus size={18}/> {editPlace ? "Edit" : "Add"} Destination</h5>
+            <Form onSubmit={handlePlaceSubmit}>
+              <Form.Control className="mb-2" size="sm" placeholder="Name" value={editPlace?.name || newPlace.name} onChange={e => editPlace ? setEditPlace({...editPlace, name: e.target.value}) : setNewPlace({...newPlace, name: e.target.value})} required />
+              <Row><Col><Form.Control className="mb-2" size="sm" placeholder="Lat" value={editPlace?.lat || newPlace.lat} readOnly /></Col>
+              <Col><Form.Control className="mb-2" size="sm" placeholder="Lng" value={editPlace?.lng || newPlace.lng} readOnly /></Col></Row>
+              <Form.Control className="mb-2" size="sm" placeholder="Image URL" value={editPlace?.img || newPlace.img} onChange={e => editPlace ? setEditPlace({...editPlace, img: e.target.value}) : setNewPlace({...newPlace, img: e.target.value})} />
+              <Form.Control as="textarea" rows={2} className="mb-2" size="sm" placeholder="Details" value={editPlace?.details || newPlace.details} onChange={e => editPlace ? setEditPlace({...editPlace, details: e.target.value}) : setNewPlace({...newPlace, details: e.target.value})} />
+              <Button type="submit" variant="primary" size="sm" className="w-100">{editPlace ? "Update" : "Save"} Destination</Button>
+              {editPlace && <Button variant="link" size="sm" className="w-100 mt-1" onClick={() => setEditPlace(null)}>Cancel</Button>}
+            </Form>
+          </Card>
         </Col>
       </Row>
 
-      {/* Destination Management */}
-      <div className="bg-white shadow-sm p-4 mb-5 border" style={{ borderRadius: '15px' }}>
-        <div className="d-flex justify-content-between mb-3 align-items-center">
-            <h5 className="fw-bold m-0"><MapPin size={20} className="me-2 text-info"/>Destinations</h5>
-            <InputGroup style={{ width: '300px' }}>
-                <InputGroup.Text className="bg-white"><Search size={16}/></InputGroup.Text>
-                <Form.Control placeholder="Filter destinations..." value={placeSearch} onChange={e => setPlaceSearch(e.target.value)} />
-            </InputGroup>
+      {/* PLACES TABLE */}
+      <Card className="mb-4 shadow-sm p-3">
+        <div className="d-flex justify-content-between align-items-center mb-3">
+          <h5 className="m-0"><MapPin size={20}/> Destinations</h5>
+          <InputGroup size="sm" style={{width: '250px'}}><InputGroup.Text><Search size={14}/></InputGroup.Text><Form.Control placeholder="Search..." onChange={e => setPlaceSearch(e.target.value)} /></InputGroup>
         </div>
         <Table responsive hover size="sm">
-          <thead className="table-light"><tr><th>Name</th><th>City</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Name</th><th>City</th><th>Actions</th></tr></thead>
           <tbody>
-            {filteredPlaces.map(p => (
+            {places.filter(p => p.name.toLowerCase().includes(placeSearch.toLowerCase())).map(p => (
               <tr key={p.id}>
                 <td>{p.name}</td><td>{p.city}</td>
                 <td>
-                  <Button variant="link" size="sm" onClick={() => setMapTarget({lat: p.lat, lng: p.lng})}>
-                    <Target size={18}/>
-                  </Button> {/* FIXED HERE */}
+                  <Button variant="link" onClick={() => setMapTarget({lat: p.lat, lng: p.lng})}><Target size={16}/></Button>
+                  <Button variant="link" className="text-warning" onClick={() => setEditPlace(p)}><Edit size={16}/></Button>
+                  <Button variant="link" className="text-danger" onClick={() => handleDelete('places', p.id)}><Trash2 size={16}/></Button>
                 </td>
               </tr>
             ))}
           </tbody>
         </Table>
-      </div>
+      </Card>
 
-      {/* Geofence Management */}
-      <div className="bg-white shadow-sm p-4 border" style={{ borderRadius: '15px' }}>
-        <div className="d-flex justify-content-between mb-3 align-items-center">
-            <h5 className="fw-bold m-0"><ShieldAlert size={20} className="me-2 text-danger"/>Geofences</h5>
-            <InputGroup style={{ width: '300px' }}>
-                <InputGroup.Text className="bg-white"><Search size={16}/></InputGroup.Text>
-                <Form.Control placeholder="Filter zones..." value={zoneSearch} onChange={e => setZoneSearch(e.target.value)} />
-            </InputGroup>
+      {/* GEOFENCE TABLE */}
+      <Card className="shadow-sm p-3">
+        <div className="d-flex justify-content-between align-items-center mb-3">
+          <h5 className="m-0 text-danger"><ShieldAlert size={20}/> Geofences</h5>
+          <InputGroup size="sm" style={{width: '250px'}}><InputGroup.Text><Search size={14}/></InputGroup.Text><Form.Control placeholder="Search..." onChange={e => setZoneSearch(e.target.value)} /></InputGroup>
         </div>
         <Table responsive hover size="sm">
-          <thead className="table-light"><tr><th>Zone Name</th><th>Category</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Zone</th><th>Category</th><th>Actions</th></tr></thead>
           <tbody>
-            {filteredZones.map(z => (
+            {safeZones.filter(z => z.name.toLowerCase().includes(zoneSearch.toLowerCase())).map(z => (
               <tr key={z.id}>
                 <td>{z.name}</td>
-                <td><Badge bg={z.category === "Danger" ? "danger" : "success"}>{z.category}</Badge></td>
+                <td><Badge bg={z.category === 'Danger' ? 'danger' : 'success'}>{z.category}</Badge></td>
                 <td>
-                  <Button variant="outline-secondary" size="sm" onClick={() => setMapTarget({lat: z.lat, lng: z.lng})}>
-                    <Search size={14}/>
-                  </Button>
+                  <Button variant="link" onClick={() => setMapTarget({lat: z.lat, lng: z.lng})}><Target size={16}/></Button>
+                  <Button variant="link" className="text-danger" onClick={() => handleDelete('safe-zones', z.id)}><Trash2 size={16}/></Button>
                 </td>
               </tr>
             ))}
           </tbody>
         </Table>
-      </div>
+      </Card>
     </Container>
   );
 };
