@@ -10,4 +10,3 @@ httpx==0.27.0
 scikit-learn
 joblib
 numpy
-python-dotenv
