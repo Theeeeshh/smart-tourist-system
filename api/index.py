@@ -82,6 +82,14 @@ def get_db():
 def create_digital_id(passport: str):
     """Generates a unique Digital ID based on passport info."""
     return "DID_" + hashlib.sha256(passport.encode()).hexdigest()[:12].upper()
+def get_safety_status(lat, lng, db):
+    zones = db.query(SafeZone).all()
+    for zone in zones:
+        # Simple Haversine or distance check
+        distance = math.sqrt((lat - zone.lat)**2 + (lng - zone.lng)**2) * 111000 
+        if distance <= zone.radius:
+            return f"Entered {zone.name}", "danger" if zone.category != "Safe" else "success"
+    return "You are in a safe area", "info"
 
 
 
