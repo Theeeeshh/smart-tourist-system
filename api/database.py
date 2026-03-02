@@ -41,7 +41,7 @@ class SafeZone(Base):
 
 def run_migrations():
     with engine.connect() as connection:
-        connection.execute(text("ALTER TABLE safe_zones ADD COLUMN category VARCHAR DEFAULT 'Safe'"))
+        connection.execute(text("ALTER TABLE safe_zones ADD COLUMN category VARCHAR DEFAULT 'Safe';"))
         
         connection.commit()
 
