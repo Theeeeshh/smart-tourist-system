@@ -39,11 +39,7 @@ class SafeZone(Base):
     # New column to classify the zone
     category = Column(String, default="Safe") # "Safe", "Danger", "High Danger"
 
-def run_migrations():
-    with engine.connect() as connection:
-        connection.execute(text("ALTER TABLE safe_zones ADD COLUMN category VARCHAR DEFAULT 'Safe';"))
-        
-        connection.commit()
 
-run_migrations()
+
+
 Base.metadata.create_all(bind=engine)
