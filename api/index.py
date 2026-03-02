@@ -4,10 +4,6 @@ import json
 import redis
 import httpx
 import math
-import joblib
-import os
-import numpy as np
-import httpx
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
