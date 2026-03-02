@@ -4,6 +4,10 @@ import json
 import redis
 import httpx
 import math
+import joblib
+import os
+import numpy as np
+import httpx
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -104,6 +108,19 @@ def get_safety_status(lat, lng, db: Session):
                 alert_level = "success"
 
     return current_status, alert_level
+async def get_amadeus_token():
+    """Fetches a fresh OAuth2 token from Amadeus."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://test.api.amadeus.com/v1/security/oauth2/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": os.getenv("AMADEUS_KEY"),
+                "client_secret": os.getenv("AMADEUS_SECRET"),
+            },
+        )
+        data = response.json()
+        return data.get("access_token")
 
 # --- AUTHENTICATION ENDPOINTS ---
 
@@ -227,43 +244,93 @@ def get_places(db: Session = Depends(get_db)):
     return db.query(Place).all()
 
 @app.post("/api/admin/places")
-async def add_place_with_auto_zones(place: dict, db: Session = Depends(get_db)):
-    # 1. Save the primary destination
-    new_place = Place(name=place['name'], city=place['city'], img=place['img'], details=place['details'])
+async def add_place_with_ai_and_google_zones(place: dict, db: Session = Depends(get_db)):
+    # 1. Save the main destination
+    new_place = Place(
+        name=place['name'], 
+        city=place['city'], 
+        img=place['img'], 
+        details=place['details']
+    )
     db.add(new_place)
+    db.flush() 
     
-    # 2. AUTOMATIC ZONE DISCOVERY
-    # We assume you provide Lat/Lng for the place in the request
     lat, lng = place.get('lat'), place.get('lng')
     
-    if lat and lng:
-        async with httpx.AsyncClient() as client:
-            # Fetch real-world safety data for this coordinate
-            response = await client.get(f"{SAFE_API_URL}?latitude={lat}&longitude={lng}", headers={"Authorization": f"Bearer {YOUR_TOKEN}"})
-            data = response.json()
+    # 2. AI PREDICTION for Center
+    primary_category = "Safe" 
+    if model and type_encoder:
+        try:
+            type_idx = type_encoder.transform([place['type']])[0]
+            features = np.array([[type_idx, float(place['rating']), float(place['fee'])]])
+            prediction = model.predict(features)[0]
+            categories_map = {0: "Safe", 1: "Danger", 2: "High Danger"}
+            primary_category = categories_map.get(prediction, "Safe")
+        except Exception as e:
+            print(f"AI Inference Error: {e}")
 
-            for item in data.get('data', []):
-                score = item['safetyScores']['overall']
+    db.add(SafeZone(
+        name=f"AI PROFILE: {place['name']}",
+        lat=lat, lng=lng, radius=1000,
+        category=primary_category
+    ))
+
+    # 3. GOOGLE PLACES: Balanced Zone Generation
+    if lat and lng and GOOGLE_API_KEY:
+        async with httpx.AsyncClient() as client:
+            target_types = "police|hospital|liquor_store|night_club|bar|park|cafe"
+            response = await client.get(
+                f"{SEARCH_URL}?location={lat},{lng}&radius=4000&type={target_types}&key={GOOGLE_API_KEY}"
+            )
+            
+            if response.status_code == 200:
+                results = response.json().get('results', [])
                 
-                # Determine classification based on score
-                if score > 70:
-                    zone_name = f"HIGH DANGER: {item['name']}"
-                elif score > 40:
-                    zone_name = f"Danger: {item['name']}"
-                else:
-                    zone_name = f"Safe: {item['name']}"
-                
-                # Add to your SafeZone database automatically
-                auto_zone = SafeZone(
-                    name=zone_name,
-                    lat=item['geoCode']['latitude'],
-                    lng=item['geoCode']['longitude'],
-                    radius=500 # Default 500m radius
-                )
-                db.add(auto_zone)
-    
+                # Tracking counters to hit your "2-3 zones per category" requirement
+                counts = {"Safe": 0, "Danger": 0, "High Danger": 0}
+                limit = 3 # Max 3 per specific category, rest become Neutral
+
+                for item in results:
+                    poi_types = item.get('types', [])
+                    poi_name = item['name']
+                    item_lat = item['geometry']['location']['lat']
+                    item_lng = item['geometry']['location']['lng']
+                    
+                    # Logic to determine the "potential" category
+                    if any(t in poi_types for t in ["police", "hospital"]) and counts["Safe"] < limit:
+                        cat = "Safe"
+                        prefix = "SAFE HUB"
+                        radius = 500
+                        counts["Safe"] += 1
+                    elif "night_club" in poi_types and counts["High Danger"] < limit:
+                        cat = "High Danger"
+                        prefix = "CRITICAL"
+                        radius = 300
+                        counts["High Danger"] += 1
+                    elif any(t in poi_types for t in ["liquor_store", "bar"]) and counts["Danger"] < limit:
+                        cat = "Danger"
+                        prefix = "CAUTION"
+                        radius = 400
+                        counts["Danger"] += 1
+                    else:
+                        # EVERYTHING ELSE MARKED AS NEUTRAL
+                        cat = "Neutral"
+                        prefix = "ZONE"
+                        radius = 450
+
+                    db.add(SafeZone(
+                        name=f"{prefix}: {poi_name}",
+                        lat=item_lat,
+                        lng=item_lng,
+                        radius=radius,
+                        category=cat
+                    ))
+
     db.commit()
-    return {"message": "Place and safety zones automatically added!"}
+    return {
+        "message": f"Place added. AI classified as {primary_category}.",
+        "stats": counts
+    }
 
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):
