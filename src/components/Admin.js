@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Container, Row, Col, Table, Form, Button, Badge } from 'react-bootstrap';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Container, Row, Col, Table, Form, Button, Badge, InputGroup } from 'react-bootstrap';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents, useMap } from 'react-leaflet';
-import { Users, MapPin, ShieldAlert, Trash2, Edit } from 'lucide-react';
+import { Users, MapPin, ShieldAlert, Trash2, Edit, Search, Target } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
+// Fix for default Leaflet marker icons breaking in React
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
@@ -15,6 +16,17 @@ let DefaultIcon = L.icon({
   iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
+
+// --- NEW HELPER: Handles Smooth Zooming to Zones/Places ---
+function MapPanTo({ target }) {
+  const map = useMap();
+  useEffect(() => {
+    if (target) {
+      map.flyTo([target.lat, target.lng], 16, { duration: 1.5 });
+    }
+  }, [target, map]);
+  return null;
+}
 
 function MapClickHandler({ onMapClick }) {
   useMapEvents({
@@ -42,12 +54,35 @@ const Admin = () => {
   const [safeZones, setSafeZones] = useState([]);
   const [places, setPlaces] = useState([]);
   
+  // New States for Search and Zooming
+  const [mapTarget, setMapTarget] = useState(null);
+  const [zoneSearch, setZoneSearch] = useState("");
+  const [placeSearch, setPlaceSearch] = useState("");
+
   const [newPlace, setNewPlace] = useState({ name: '', city: '', img: '', details: '', lat: '', lng: '' });
   const [editPlace, setEditPlace] = useState(null);
   const [newZone, setNewZone] = useState({ name: '', lat: '', lng: '', radius: '' });
   const [editZone, setEditZone] = useState(null);
 
-  // Stats logic
+  // --- LOGIC: Filter Lists based on Search Factor ---
+  const filteredZones = useMemo(() => 
+    safeZones.filter(z => z.name.toLowerCase().includes(zoneSearch.toLowerCase())), 
+  [safeZones, zoneSearch]);
+
+  const filteredPlaces = useMemo(() => 
+    places.filter(p => p.name.toLowerCase().includes(placeSearch.toLowerCase())), 
+  [places, placeSearch]);
+
+  // --- LOGIC: Count People currently inside a Geofence ---
+  const getPeopleInZoneCount = (zone) => {
+    return tourists.filter(t => {
+      if (!t.last_lat || !t.last_lng) return false;
+      // Calculate distance in meters using Leaflet's built-in geometry
+      const dist = L.latLng(zone.lat, zone.lng).distanceTo([t.last_lat, t.last_lng]);
+      return dist <= zone.radius;
+    }).length;
+  };
+
   const stats = {
     danger: tourists.filter(t => t.is_online && (t.current_status === "Danger" || t.current_status === "High Danger")).length,
     normal: tourists.filter(t => t.is_online && (t.current_status === "Safe" || t.current_status === "Neutral" || !t.current_status)).length
@@ -70,10 +105,7 @@ const Admin = () => {
     const controller = new AbortController();
     fetchData(controller.signal);
     const interval = setInterval(() => fetchData(controller.signal), 10000);
-    return () => {
-      controller.abort();
-      clearInterval(interval);
-    };
+    return () => { controller.abort(); clearInterval(interval); };
   }, []);
 
   const handleMapClick = (lat, lng) => {
@@ -114,12 +146,8 @@ const Admin = () => {
       <div className="d-flex justify-content-between align-items-center mb-4">
         <h2 className="fw-bold text-dark m-0">Admin Command Center</h2>
         <div className="d-flex gap-3">
-            <Badge bg="danger" className="p-2 px-3 shadow-sm fs-6">
-                <ShieldAlert size={18} className="me-2"/> In Danger: {stats.danger}
-            </Badge>
-            <Badge bg="success" className="p-2 px-3 shadow-sm fs-6">
-                <Users size={18} className="me-2"/> Normal: {stats.normal}
-            </Badge>
+            <Badge bg="danger" className="p-2 px-3 shadow-sm fs-6"><ShieldAlert size={18} className="me-2"/> In Danger: {stats.danger}</Badge>
+            <Badge bg="success" className="p-2 px-3 shadow-sm fs-6"><Users size={18} className="me-2"/> Normal: {stats.normal}</Badge>
         </div>
       </div>
       
@@ -128,8 +156,11 @@ const Admin = () => {
           <div className="auth-card-inner p-0 overflow-hidden" style={{ height: '450px', position: 'relative', zIndex: 1, borderRadius: '15px' }}>
             <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: '100%', width: '100%' }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              
+              <MapPanTo target={mapTarget} />
               <MapClickHandler onMapClick={handleMapClick} />
               <MapBoundsManager tourists={tourists} />
+
               {tourists.map(t => t.last_lat && (
                 <Marker key={t.id} position={[t.last_lat, t.last_lng]}>
                   <Popup>
@@ -141,6 +172,7 @@ const Admin = () => {
                   </Popup>
                 </Marker>
               ))}
+
               {safeZones.map(zone => (
                 <Circle 
                   key={zone.id} center={[zone.lat, zone.lng]} radius={zone.radius} 
@@ -172,6 +204,7 @@ const Admin = () => {
                         {t.username} <Badge bg={t.is_online ? "success" : "secondary"} pill className="ms-1">.</Badge>
                       </td>
                       <td>
+                        <Button variant="link" className="p-0 text-primary me-2" onClick={() => setMapTarget({lat: t.last_lat, lng: t.last_lng})}><Target size={16}/></Button>
                         <Button variant="link" className="text-danger p-0" onClick={() => { if (window.confirm(`Permanently delete ${t.username}?`)) fetch(`/api/admin/users/${t.id}`, { method: 'DELETE' }).then(() => fetchData()); }}><Trash2 size={16}/></Button>
                       </td>
                     </tr>
@@ -179,6 +212,38 @@ const Admin = () => {
                 </tbody>
               </Table>
             </div>
+          </div>
+        </Col>
+      </Row>
+
+      {/* --- PLACES MANAGEMENT WITH SEARCH --- */}
+      <Row className="g-4 mb-5">
+        <Col md={12}>
+          <div className="auth-card-inner shadow-sm p-4">
+            <div className="d-flex justify-content-between mb-3 align-items-center">
+              <h5 className="fw-bold m-0"><MapPin size={20} className="me-2"/>Manage Destinations</h5>
+              <InputGroup style={{ width: '300px' }}>
+                <InputGroup.Text><Search size={16}/></InputGroup.Text>
+                <Form.Control placeholder="Search place name..." value={placeSearch} onChange={e => setPlaceSearch(e.target.value)} />
+              </InputGroup>
+            </div>
+            <Table responsive striped hover>
+              <thead><tr><th>Name</th><th>City</th><th>Live Nearby</th><th>Actions</th></tr></thead>
+              <tbody>
+                {filteredPlaces.map(p => (
+                  <tr key={p.id}>
+                    <td>{p.name}</td>
+                    <td>{p.city}</td>
+                    <td><Badge bg="info">{tourists.filter(t => t.last_lat && L.latLng(p.lat, p.lng).distanceTo([t.last_lat, t.last_lng]) < 5000).length} users</Badge></td>
+                    <td>
+                      <Button variant="link" className="p-0 text-primary me-2" onClick={() => setMapTarget({lat: p.lat, lng: p.lng})}><Target size={18}/></Button>
+                      <Button variant="link" className="p-0 me-2" onClick={() => setEditPlace(p)}><Edit size={16}/></Button>
+                      <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/places/${p.id}`, {method: 'DELETE'}).then(fetchData)}><Trash2 size={16}/></Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
           </div>
         </Col>
       </Row>
@@ -199,17 +264,39 @@ const Admin = () => {
           </div>
         </Col>
         <Col md={6}>
-          <div className="auth-card-inner shadow-sm p-3">
-            <h5 className="fw-bold mb-3">Manage Destinations</h5>
-            <Table size="sm" striped hover>
-              <thead><tr><th>Name</th><th>City</th><th>Actions</th></tr></thead>
+            {/* Forms are on the left, this space can be used for secondary charts or left empty */}
+        </Col>
+      </Row>
+
+      {/* --- GEOFENCES MANAGEMENT WITH SEARCH & CATEGORY --- */}
+      <Row className="g-4">
+        <Col md={12}>
+          <div className="auth-card-inner shadow-sm p-4">
+            <div className="d-flex justify-content-between mb-3 align-items-center">
+              <h5 className="fw-bold m-0 text-danger"><ShieldAlert size={20} className="me-2"/>Search Geofences</h5>
+              <InputGroup style={{ width: '300px' }}>
+                <InputGroup.Text><Search size={16}/></InputGroup.Text>
+                <Form.Control placeholder="Search zone name..." value={zoneSearch} onChange={e => setZoneSearch(e.target.value)} />
+              </InputGroup>
+            </div>
+            <Table responsive striped hover>
+              <thead><tr><th>Zone Name</th><th>Category</th><th>Occupancy</th><th>Actions</th></tr></thead>
               <tbody>
-                {places.map(p => (
-                  <tr key={p.id}>
-                    <td>{p.name}</td><td>{p.city}</td>
+                {filteredZones.map(z => (
+                  <tr key={z.id}>
+                    <td>{z.name}</td>
                     <td>
-                      <Button variant="link" className="p-0 me-2" onClick={() => setEditPlace(p)}><Edit size={16}/></Button>
-                      <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/places/${p.id}`, {method: 'DELETE'}).then(fetchData)}><Trash2 size={16}/></Button>
+                      <Badge bg={z.category === "High Danger" ? "dark" : z.category === "Danger" ? "danger" : z.category === "Safe" ? "warning" : "success"}>
+                        {z.category}
+                      </Badge>
+                    </td>
+                    <td><Badge bg="secondary" pill>{getPeopleInZoneCount(z)} people</Badge></td>
+                    <td>
+                      <Button variant="outline-primary" size="sm" className="me-2" onClick={() => setMapTarget({lat: z.lat, lng: z.lng})}>
+                        <Search size={14} className="me-1"/> Zoom
+                      </Button>
+                      <Button variant="link" className="p-0 me-2" onClick={() => setEditZone(z)}><Edit size={16}/></Button>
+                      <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/safe-zones/${z.id}`, {method: 'DELETE'}).then(fetchData)}><Trash2 size={16}/></Button>
                     </td>
                   </tr>
                 ))}
@@ -219,7 +306,7 @@ const Admin = () => {
         </Col>
       </Row>
 
-      <Row className="g-4">
+      <Row className="mt-4 g-4">
         <Col md={6}>
           <div className="auth-card-inner shadow-sm p-3">
             <h5 className="fw-bold mb-3"><ShieldAlert size={20} className="me-2 text-danger"/>{editZone ? 'Edit Zone' : 'Define Safe Zone'}</h5>
@@ -230,25 +317,6 @@ const Admin = () => {
               <Button type="submit" className="w-100 btn-pill-gradient border-0">{editZone ? 'Update Zone' : 'Create Geofence'}</Button>
               {editZone && <Button variant="link" className="w-100 mt-1 text-secondary" onClick={() => { setEditZone(null); setNewZone({name:'', lat:'', lng:'', radius:''}); }}>Cancel Update</Button>}
             </Form>
-          </div>
-        </Col>
-        <Col md={6}>
-          <div className="auth-card-inner shadow-sm p-3">
-            <h5 className="fw-bold mb-3">Manage Geofences</h5>
-            <Table size="sm" striped hover>
-              <thead><tr><th>Name</th><th>Radius</th><th>Actions</th></tr></thead>
-              <tbody>
-                {safeZones.map(z => (
-                  <tr key={z.id}>
-                    <td>{z.name}</td><td>{z.radius}m</td>
-                    <td>
-                      <Button variant="link" className="p-0 me-2" onClick={() => setEditZone(z)}><Edit size={16}/></Button>
-                      <Button variant="link" className="text-danger p-0" onClick={() => fetch(`/api/admin/safe-zones/${z.id}`, {method: 'DELETE'}).then(fetchData)}><Trash2 size={16}/></Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
           </div>
         </Col>
       </Row>
