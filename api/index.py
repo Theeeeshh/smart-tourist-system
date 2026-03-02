@@ -22,10 +22,16 @@ SAFE_API_URL = "https://test.api.amadeus.com/v1/safety/safety-rated-locations"
 REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
 
 if REDIS_URL:
-    # Use the remote Vercel/Upstash Redis instance
-    r = redis.from_url(REDIS_URL, decode_responses=True)
+    # Using a connection pool is MANDATORY to avoid "Device or resource busy"
+    pool = redis.ConnectionPool.from_url(
+        REDIS_URL, 
+        decode_responses=True,
+        socket_connect_timeout=5,  # Give it time to resolve DNS
+        socket_timeout=5,          # Don't hang forever
+        retry_on_timeout=True
+    )
+    r = redis.Redis(connection_pool=pool)
 else:
-    # Fallback for local development
     r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
 app.add_middleware(
@@ -161,11 +167,23 @@ def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
 
 @app.get("/api/admin/tourists")
 def get_all_tourists(db: Session = Depends(get_db)):
-    """Combines persistent DB data with real-time Redis status."""
     users = db.query(User).filter(User.is_admin == False).all()
+    if not users:
+        return []
+
+    # 1. Prepare all keys first
+    keys = [f"live_loc:{user.username}" for user in users]
+    
+    try:
+        # 2. Fetch ALL live data in ONE single network call
+        live_data_list = r.mget(keys)
+    except redis.exceptions.RedisError:
+        # Fallback if Redis fails so the page doesn't 500
+        live_data_list = [None] * len(users)
+
     results = []
-    for user in users:
-        live_data = r.get(f"live_loc:{user.username}")
+    # 3. Zip them together for the response
+    for user, live_data in zip(users, live_data_list):
         loc = json.loads(live_data) if live_data else None
         
         results.append({
