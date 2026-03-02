@@ -11,6 +11,15 @@ import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 let DefaultIcon = L.icon({ iconUrl: markerIcon, shadowUrl: markerShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
 L.Marker.prototype.options.icon = DefaultIcon;
 
+// Helper to keep map focused on user's current position
+function MapRecenter({ location }) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView([location.lat, location.lng], 14); 
+  }, [location, map]);
+  return null;
+}
+
 const Dashboard = ({ user }) => {
   const [location, setLocation] = useState({ lat: 11.41, lng: 76.69 });
   const [city, setCity] = useState("Detecting...");
@@ -19,16 +28,13 @@ const Dashboard = ({ user }) => {
   const [zones, setZones] = useState([]);
   const [nearbyPlaces, setNearbyPlaces] = useState([]);
 
-  // --- AUTOMATED EMERGENCY CONTACT LOGIC ---
   const fetchLocalContacts = async (lat, lng) => {
     try {
-      // Step 1: Automate city detection using OpenStreetMap Nominatim
       const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
       const geoData = await geoRes.json();
       const area = geoData.address.city || geoData.address.state_district || geoData.address.state || "India";
       setCity(area);
 
-      // Step 2: Automatically map the detected area to specific numbers
       const emergencyDb = {
         "Kerala": [
           { service: "Police", number: "112" },
@@ -57,7 +63,6 @@ const Dashboard = ({ user }) => {
       setLocation(coords);
       fetchLocalContacts(coords.lat, coords.lng);
 
-      // Real-time backend safety check
       const res = await fetch('/api/update-location', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -65,7 +70,6 @@ const Dashboard = ({ user }) => {
       });
       setSafety(await res.json());
       
-      // Filter places within 10km
       const pRes = await fetch('/api/places');
       const allP = await pRes.json();
       setNearbyPlaces(allP.filter(p => Math.sqrt((p.lat - coords.lat)**2 + (p.lng - coords.lng)**2) * 111 <= 10));
@@ -82,7 +86,6 @@ const Dashboard = ({ user }) => {
       </Row>
 
       <Row className="g-4">
-        {/* COLUMN 1: WHERE AM I? (MAP) */}
         <Col lg={8}>
           <Card className="shadow-sm border-0 rounded-4 overflow-hidden">
             <Card.Body className="p-0">
@@ -93,11 +96,24 @@ const Dashboard = ({ user }) => {
               <div style={{ height: '450px' }}>
                 <MapContainer center={[location.lat, location.lng]} zoom={13} style={{ height: '100%' }}>
                   <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  
+                  {/* Auto-zoom component */}
+                  <MapRecenter location={location} />
+
                   <Marker position={[location.lat, location.lng]}><Popup>You are here</Popup></Marker>
+                  
                   {zones.map(z => (
                     <Circle 
                       key={z.id} center={[z.lat, z.lng]} radius={z.radius} 
-                      pathOptions={{ color: z.category === "High Danger" ? 'red' : z.category === "Danger" ? 'orange' : 'green' }} 
+                      pathOptions={{ 
+                        color: z.category === "High Danger" ? 'black' : 
+                               z.category === "Danger" ? 'red' : 
+                               z.category === "Safe" ? 'yellow' : 'green', // Neutral is green
+                        fillColor: z.category === "High Danger" ? 'black' : 
+                                   z.category === "Danger" ? 'red' : 
+                                   z.category === "Safe" ? 'yellow' : 'green',
+                        fillOpacity: 0.3 
+                      }} 
                     />
                   ))}
                 </MapContainer>
@@ -106,7 +122,6 @@ const Dashboard = ({ user }) => {
           </Card>
         </Col>
 
-        {/* COLUMN 2: PLACES & AUTO-CONTACTS */}
         <Col lg={4}>
           <Card className="shadow-sm border-0 rounded-4 mb-4">
             <Card.Header className="bg-white fw-bold py-3"><Compass size={18} className="me-2 text-success"/>Places (10km)</Card.Header>
