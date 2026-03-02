@@ -67,7 +67,7 @@ const Admin = () => {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000); // 10s Background Sync
+    const interval = setInterval(fetchData, 10000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -84,15 +84,27 @@ const Admin = () => {
     e.preventDefault();
     const method = editPlace ? 'PUT' : 'POST';
     const url = editPlace ? `/api/admin/places/${editPlace.id}` : '/api/admin/places';
-    const payload = editPlace || newPlace;
-
     await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(editPlace || newPlace)
     });
     setEditPlace(null);
     setNewPlace(defaultPlace);
+    fetchData();
+  };
+
+  // ADDED: Missing handleZoneSubmit function
+  const handleZoneSubmit = async (e) => {
+    e.preventDefault();
+    // Note: Your index.py doesn't show a POST for manual zones yet, 
+    // but the frontend requires it for your "Define Safe Zone" form.
+    await fetch('/api/admin/safe-zones', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newZone)
+    });
+    setNewZone(defaultZone);
     fetchData();
   };
 
@@ -146,14 +158,14 @@ const Admin = () => {
           <Card className="shadow-sm border-0 rounded-4 p-4 h-100">
             <h5 className="fw-bold mb-3"><MapPin className="text-danger me-2"/> {editPlace ? "Update" : "Add"} Place</h5>
             <Form onSubmit={handlePlaceSubmit}>
-              <Form.Control size="sm" className="mb-2 rounded-3" placeholder="Place Name" value={editPlace?.name || newPlace.name} onChange={e => editPlace ? setEditPlace({...editPlace, name: e.target.value}) : setNewPlace({...newPlace, name: e.target.value})} required />
-              <Form.Control size="sm" className="mb-2 rounded-3" placeholder="City" value={editPlace?.city || newPlace.city} onChange={e => editPlace ? setEditPlace({...editPlace, city: e.target.value}) : setNewPlace({...newPlace, city: e.target.value})} />
+              <Form.Control size="sm" className="mb-2" placeholder="Place Name" value={editPlace?.name || newPlace.name} onChange={e => editPlace ? setEditPlace({...editPlace, name: e.target.value}) : setNewPlace({...newPlace, name: e.target.value})} required />
+              <Form.Control size="sm" className="mb-2" placeholder="City" value={editPlace?.city || newPlace.city} onChange={e => editPlace ? setEditPlace({...editPlace, city: e.target.value}) : setNewPlace({...newPlace, city: e.target.value})} />
               <Row className="g-2 mb-2">
-                <Col><Form.Control size="sm" className="rounded-3" placeholder="Lat" value={editPlace?.lat || newPlace.lat} readOnly /></Col>
-                <Col><Form.Control size="sm" className="rounded-3" placeholder="Lng" value={editPlace?.lng || newPlace.lng} readOnly /></Col>
+                <Col><Form.Control size="sm" placeholder="Lat" value={editPlace?.lat || newPlace.lat} readOnly /></Col>
+                <Col><Form.Control size="sm" placeholder="Lng" value={editPlace?.lng || newPlace.lng} readOnly /></Col>
               </Row>
-              <Form.Control size="sm" className="mb-2 rounded-3" placeholder="Image URL" value={editPlace?.img || newPlace.img} onChange={e => editPlace ? setEditPlace({...editPlace, img: e.target.value}) : setNewPlace({...newPlace, img: e.target.value})} />
-              <Form.Control as="textarea" size="sm" rows={3} className="mb-3 rounded-3" placeholder="Details..." value={editPlace?.details || newPlace.details} onChange={e => editPlace ? setEditPlace({...editPlace, details: e.target.value}) : setNewPlace({...newPlace, details: e.target.value})} />
+              <Form.Control size="sm" className="mb-2" placeholder="Image URL" value={editPlace?.img || newPlace.img} onChange={e => editPlace ? setEditPlace({...editPlace, img: e.target.value}) : setNewPlace({...newPlace, img: e.target.value})} />
+              <Form.Control as="textarea" size="sm" rows={3} className="mb-3" placeholder="Details..." value={editPlace?.details || newPlace.details} onChange={e => editPlace ? setEditPlace({...editPlace, details: e.target.value}) : setNewPlace({...newPlace, details: e.target.value})} />
               <Button type="submit" className="w-100 border-0 fw-bold py-2 rounded-pill" style={{ background: 'linear-gradient(90deg, #ff4b2b, #ff416c)' }}>
                 Publish & Auto-Generate Safe Zones
               </Button>
@@ -166,7 +178,7 @@ const Admin = () => {
           <Card className="shadow-sm border-0 rounded-4 p-4 h-100">
             <div className="d-flex justify-content-between align-items-center mb-3">
               <h5 className="fw-bold m-0">Manage Destinations</h5>
-              <InputGroup size="sm" style={{width: '180px'}}><InputGroup.Text className="bg-white border-end-0"><Search size={14}/></InputGroup.Text><Form.Control className="border-start-0" placeholder="Search..." onChange={e => setPlaceSearch(e.target.value)}/></InputGroup>
+              <InputGroup size="sm" style={{width: '180px'}}><InputGroup.Text><Search size={14}/></InputGroup.Text><Form.Control placeholder="Search..." onChange={e => setPlaceSearch(e.target.value)}/></InputGroup>
             </div>
             <div className="overflow-auto" style={{maxHeight: '320px'}}>
               <Table hover borderless size="sm">
@@ -192,12 +204,12 @@ const Admin = () => {
           <Card className="shadow-sm border-0 rounded-4 p-4 h-100">
             <h5 className="fw-bold mb-3"><ShieldAlert className="text-danger me-2"/> Define Safe Zone</h5>
             <Form onSubmit={handleZoneSubmit}>
-              <Form.Control size="sm" className="mb-2 rounded-3" placeholder="Zone Name" value={newZone.name} onChange={e => setNewZone({...newZone, name: e.target.value})} required />
+              <Form.Control size="sm" className="mb-2" placeholder="Zone Name" value={newZone.name} onChange={e => setNewZone({...newZone, name: e.target.value})} required />
               <Row className="g-2 mb-2">
-                <Col><Form.Control size="sm" className="rounded-3" placeholder="Lat" value={newZone.lat} readOnly /></Col>
-                <Col><Form.Control size="sm" className="rounded-3" placeholder="Lng" value={newZone.lng} readOnly /></Col>
+                <Col><Form.Control size="sm" placeholder="Lat" value={newZone.lat} readOnly /></Col>
+                <Col><Form.Control size="sm" placeholder="Lng" value={newZone.lng} readOnly /></Col>
               </Row>
-              <Form.Control size="sm" className="mb-3 rounded-3" type="number" placeholder="Radius (meters)" value={newZone.radius} onChange={e => setNewZone({...newZone, radius: e.target.value})} required />
+              <Form.Control size="sm" className="mb-3" type="number" placeholder="Radius (meters)" value={newZone.radius} onChange={e => setNewZone({...newZone, radius: e.target.value})} required />
               <Button type="submit" className="w-100 border-0 fw-bold py-2 rounded-pill" style={{ background: 'linear-gradient(90deg, #ff4b2b, #ff416c)' }}>
                 Create Geofence
               </Button>
@@ -210,7 +222,7 @@ const Admin = () => {
           <Card className="shadow-sm border-0 rounded-4 p-4 h-100">
             <div className="d-flex justify-content-between align-items-center mb-3">
               <h5 className="fw-bold m-0">Manage Geofences</h5>
-              <InputGroup size="sm" style={{width: '180px'}}><InputGroup.Text className="bg-white border-end-0"><Search size={14}/></InputGroup.Text><Form.Control className="border-start-0" placeholder="Search..." onChange={e => setZoneSearch(e.target.value)}/></InputGroup>
+              <InputGroup size="sm" style={{width: '180px'}}><InputGroup.Text><Search size={14}/></InputGroup.Text><Form.Control placeholder="Search..." onChange={e => setZoneSearch(e.target.value)}/></InputGroup>
             </div>
             <div className="overflow-auto" style={{maxHeight: '320px'}}>
               <Table hover borderless size="sm">
