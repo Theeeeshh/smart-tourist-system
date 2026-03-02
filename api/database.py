@@ -20,13 +20,7 @@ class User(Base):
     last_lat = Column(Float, nullable=True)
     last_lng = Column(Float, nullable=True)
 
-class SafeZone(Base):
-    __tablename__ = "safe_zones"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    lat = Column(Float)
-    lng = Column(Float)
-    radius = Column(Float)
+
 
 class Place(Base):
     __tablename__ = "places"
@@ -35,11 +29,20 @@ class Place(Base):
     city = Column(String)
     img = Column(String)
     details = Column(Text)
+class SafeZone(Base):
+    __tablename__ = "safe_zones"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    lat = Column(Float)
+    lng = Column(Float)
+    radius = Column(Float)
+    # New column to classify the zone
+    category = Column(String, default="Safe") # "Safe", "Danger", "High Danger"
 
 def run_migrations():
     with engine.connect() as connection:
-        connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;"))
-        connection.execute(text("UPDATE users SET is_admin = true WHERE username = 'lubnaalmas';"))
+        connection.execute(text("ALTER TABLE safe_zones ADD COLUMN category VARCHAR DEFAULT 'Safe'"))
+        
         connection.commit()
 
 run_migrations()

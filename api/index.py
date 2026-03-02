@@ -2,6 +2,8 @@ import hashlib
 import os
 import json
 import redis
+import httpx
+import math
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -14,7 +16,7 @@ from typing import List, Optional
 from .database import SessionLocal, User, pwd_context, SafeZone, Place
 
 app = FastAPI()
-
+SAFE_API_URL = "https://test.api.amadeus.com/v1/safety/safety-rated-locations"
 # --- REDIS CONNECTION SETUP ---
 # Detects Vercel KV or Upstash Redis URL provided by Vercel Environment Variables
 REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
@@ -108,35 +110,44 @@ def login(user: UserCreate, db: Session = Depends(get_db)):
     }
 
 # --- LIVE LOCATION & GEOFENCING ---
-
 @app.post("/api/update-location")
 def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == loc.username).first()
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # 1. Update Redis with 5-minute expiry (300 seconds) for live tracking
-    location_data = {"lat": loc.lat, "lng": loc.lng, "timestamp": datetime.utcnow().isoformat()}
-    r.setex(f"live_loc:{loc.username}", 300, json.dumps(location_data))
-
-    # 2. Update PostgreSQL for persistent history
+    
+    # 1. Update user location in DB
     db_user.last_lat, db_user.last_lng = loc.lat, loc.lng
     db.commit()
 
-    # 3. Geofencing Check
-    zones = db.query(SafeZone).all()
-    is_safe = False
-    for zone in zones:
-        distance = ((loc.lat - zone.lat)**2 + (loc.lng - zone.lng)**2)**0.5
-        if distance < (zone.radius / 111000): 
-            is_safe = True
-            break
-    
-    return {
-        "status": "Safe" if is_safe else "Alert: Outside Safe Zone",
-        "digital_id": db_user.digital_id
-    }
+    # 2. Identify region for Emergency Contacts
+    # Simple bounding box for Ooty vs Kerala
+    region = "Kerala" if 8.0 < loc.lat < 10.5 else "Ooty" if 11.0 < loc.lat < 11.5 else "Default"
 
+    # 3. Check for Zone Entry/Alerts
+    all_zones = db.query(SafeZone).all()
+    status_msg = "You are in a monitored area"
+    alert_level = "success" # Default green
+
+    for zone in all_zones:
+        # Distance calculation (approximate meters)
+        distance = math.sqrt((loc.lat - zone.lat)**2 + (loc.lng - zone.lng)**2) * 111000
+        if distance <= zone.radius:
+            if zone.category == "High Danger":
+                status_msg = f"CRITICAL: Entering {zone.name} (High Risk Area!)"
+                alert_level = "danger" # Red
+            elif zone.category == "Danger":
+                status_msg = f"WARNING: {zone.name} is a Danger Zone. Stay alert."
+                alert_level = "warning" # Yellow
+            else:
+                status_msg = f"Safe Zone: {zone.name}"
+                alert_level = "success" # Green
+            break
+
+    return {
+        "status": status_msg,
+        "alert_level": alert_level,
+        "region": region,
+        "contacts": EMERGENCY_CONTACTS.get(region)
+    }
 # --- ADMIN: TOURIST MANAGEMENT ---
 
 @app.get("/api/admin/tourists")
@@ -170,21 +181,9 @@ def delete_live_location(username: str):
 def get_safe_zones(db: Session = Depends(get_db)):
     return db.query(SafeZone).all()
 
-@app.post("/api/admin/safe-zones")
-def add_safe_zone(zone: dict, db: Session = Depends(get_db)):
-    new_zone = SafeZone(name=zone['name'], lat=zone['lat'], lng=zone['lng'], radius=zone['radius'])
-    db.add(new_zone)
-    db.commit()
-    return {"message": "Safe Zone Created"}
 
-@app.put("/api/admin/safe-zones/{zone_id}")
-def update_safe_zone(zone_id: int, zone: ZoneUpdate, db: Session = Depends(get_db)):
-    db_zone = db.query(SafeZone).filter(SafeZone.id == zone_id).first()
-    if not db_zone:
-        raise HTTPException(status_code=404, detail="Zone not found")
-    db_zone.name, db_zone.lat, db_zone.lng, db_zone.radius = zone.name, zone.lat, zone.lng, zone.radius
-    db.commit()
-    return {"message": "Zone updated"}
+
+
 
 @app.delete("/api/admin/safe-zones/{zone_id}")
 def delete_safe_zone(zone_id: int, db: Session = Depends(get_db)):
@@ -201,11 +200,43 @@ def get_places(db: Session = Depends(get_db)):
     return db.query(Place).all()
 
 @app.post("/api/admin/places")
-def add_place(place: dict, db: Session = Depends(get_db)):
+async def add_place_with_auto_zones(place: dict, db: Session = Depends(get_db)):
+    # 1. Save the primary destination
     new_place = Place(name=place['name'], city=place['city'], img=place['img'], details=place['details'])
     db.add(new_place)
+    
+    # 2. AUTOMATIC ZONE DISCOVERY
+    # We assume you provide Lat/Lng for the place in the request
+    lat, lng = place.get('lat'), place.get('lng')
+    
+    if lat and lng:
+        async with httpx.AsyncClient() as client:
+            # Fetch real-world safety data for this coordinate
+            response = await client.get(f"{SAFE_API_URL}?latitude={lat}&longitude={lng}", headers={"Authorization": f"Bearer {YOUR_TOKEN}"})
+            data = response.json()
+
+            for item in data.get('data', []):
+                score = item['safetyScores']['overall']
+                
+                # Determine classification based on score
+                if score > 70:
+                    zone_name = f"HIGH DANGER: {item['name']}"
+                elif score > 40:
+                    zone_name = f"Danger: {item['name']}"
+                else:
+                    zone_name = f"Safe: {item['name']}"
+                
+                # Add to your SafeZone database automatically
+                auto_zone = SafeZone(
+                    name=zone_name,
+                    lat=item['geoCode']['latitude'],
+                    lng=item['geoCode']['longitude'],
+                    radius=500 # Default 500m radius
+                )
+                db.add(auto_zone)
+    
     db.commit()
-    return {"message": "Place Published!"}
+    return {"message": "Place and safety zones automatically added!"}
 
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):

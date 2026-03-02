@@ -1,134 +1,136 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Badge, Container, Card, Row, Col } from 'react-bootstrap'; // Verified imports
-import { ShieldAlert, Navigation, MapPin } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
-import { motion } from 'framer-motion';
+import { Container, Row, Col, Card, Badge, ListGroup, Button } from 'react-bootstrap';
+import { MapPin, Phone, ShieldAlert, Navigation, Compass } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
-
-// Essential Leaflet CSS
 import 'leaflet/dist/leaflet.css';
 
 // Fix for default Leaflet marker icons
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-
-let DefaultIcon = L.icon({
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41]
-});
+let DefaultIcon = L.icon({ iconUrl: markerIcon, shadowUrl: markerShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-function RecenterMap({ coords }) {
-  const map = useMap();
-  useEffect(() => {
-    if (coords) { map.setView([coords.lat, coords.lng], map.getZoom()); }
-  }, [coords, map]);
-  return null;
-}
-
 const Dashboard = ({ user }) => {
-  const [location, setLocation] = useState({ lat: 27.1751, lng: 78.0421 }); 
-  const [safeZones, setSafeZones] = useState([]);
-  const [nearestZone, setNearestZone] = useState(null);
-  const [serverData, setServerData] = useState({ status: "Scanning...", digital_id: user.digital_id });
+  const [location, setLocation] = useState({ lat: 11.41, lng: 76.69 });
+  const [city, setCity] = useState("Detecting...");
+  const [contacts, setContacts] = useState([]);
+  const [safety, setSafety] = useState({ status: "Scanning...", alert_level: "info" });
+  const [zones, setZones] = useState([]);
+  const [nearbyPlaces, setNearbyPlaces] = useState([]);
 
-  const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371e3; 
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  // --- AUTOMATED EMERGENCY CONTACT LOGIC ---
+  const fetchLocalContacts = async (lat, lng) => {
+    try {
+      // Step 1: Automate city detection using OpenStreetMap Nominatim
+      const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+      const geoData = await geoRes.json();
+      const area = geoData.address.city || geoData.address.state_district || geoData.address.state || "India";
+      setCity(area);
+
+      // Step 2: Automatically map the detected area to specific numbers
+      const emergencyDb = {
+        "Kerala": [
+          { service: "Police", number: "112" },
+          { service: "Women Helpline", number: "181" },
+          { service: "Ambulance", number: "108" }
+        ],
+        "Ooty": [
+          { service: "Ooty Police", number: "0423-2442200" },
+          { service: "Tourist Help", number: "1077" },
+          { service: "Fire", number: "101" }
+        ],
+        "Nilgiris": [
+          { service: "Nilgiris Police", number: "0423-2444065" },
+          { service: "Ambulance", number: "108" }
+        ]
+      };
+
+      const matchedKey = Object.keys(emergencyDb).find(key => area.includes(key));
+      setContacts(emergencyDb[matchedKey] || [{ service: "National Help", number: "112" }]);
+    } catch (err) { console.error("Geocoding failed", err); }
   };
 
   useEffect(() => {
-    fetch('/api/admin/safe-zones').then(res => res.json()).then(data => setSafeZones(data));
+    const watchId = navigator.geolocation.watchPosition(async (pos) => {
+      const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      setLocation(coords);
+      fetchLocalContacts(coords.lat, coords.lng);
 
-    const geo = navigator.geolocation.watchPosition(async (pos) => {
-      const { latitude, longitude } = pos.coords;
+      // Real-time backend safety check
+      const res = await fetch('/api/update-location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.username, ...coords })
+      });
+      setSafety(await res.json());
       
-      // CRITICAL: Ensure these are numbers, not strings, to fix 422 error
-      const currentLoc = { 
-        lat: Number(latitude), 
-        lng: Number(longitude) 
-      };
-      
-      setLocation(currentLoc);
+      // Filter places within 10km
+      const pRes = await fetch('/api/places');
+      const allP = await pRes.json();
+      setNearbyPlaces(allP.filter(p => Math.sqrt((p.lat - coords.lat)**2 + (p.lng - coords.lng)**2) * 111 <= 10));
+    });
 
-      try {
-        const response = await fetch('/api/update-location', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            username: user.username, 
-            lat: currentLoc.lat, 
-            lng: currentLoc.lng // Must match 'lng' in Pydantic schema
-          })
-        });
-        const data = await response.json();
-        setServerData(data);
-      } catch (err) { console.error("Update failed:", err); }
-    }, (err) => console.error(err), { enableHighAccuracy: true });
-
-    return () => navigator.geolocation.clearWatch(geo);
+    fetch('/api/admin/safe-zones').then(r => r.json()).then(setZones);
+    return () => navigator.geolocation.clearWatch(watchId);
   }, [user.username]);
 
-  useEffect(() => {
-    if (safeZones.length > 0 && location) {
-      const distances = safeZones.map(zone => ({
-        ...zone,
-        dist: calculateDistance(location.lat, location.lng, zone.lat, zone.lng)
-      }));
-      setNearestZone(distances.sort((a, b) => a.dist - b.dist)[0]);
-    }
-  }, [location, safeZones]);
-
   return (
-    <Container className="mt-5 pb-5">
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-        <div className="d-flex justify-content-between align-items-center mb-4">
-          <h2 className="fw-bold mb-0">Travel Monitor</h2>
-          <Badge pill bg={serverData.status.includes("Alert") ? "danger" : "success"}>
-            {serverData.status}
-          </Badge>
-        </div>
+    <Container fluid className="mt-4 px-4">
+      <Row className="mb-4">
+        <Col><Badge bg={safety.alert_level} className="w-100 p-3 fs-6 shadow-sm">{safety.status}</Badge></Col>
+      </Row>
 
-        <div className="auth-card-inner p-0 overflow-hidden shadow-lg">
-          <div style={{ height: '400px' }}>
-            <MapContainer center={[location.lat, location.lng]} zoom={14} style={{ height: '100%' }}>
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <Marker position={[location.lat, location.lng]}><Popup>You</Popup></Marker>
-              {safeZones.map(zone => (
-                <Circle key={zone.id} center={[zone.lat, zone.lng]} radius={zone.radius} pathOptions={{ color: '#ff547b' }} />
+      <Row className="g-4">
+        {/* COLUMN 1: WHERE AM I? (MAP) */}
+        <Col lg={8}>
+          <Card className="shadow-sm border-0 rounded-4 overflow-hidden">
+            <Card.Body className="p-0">
+              <div className="p-3 bg-white d-flex justify-content-between align-items-center">
+                <h5 className="fw-bold mb-0 text-primary"><Navigation size={20} className="me-2"/>Where am I?</h5>
+                <Badge bg="light" className="text-dark">Detected: {city}</Badge>
+              </div>
+              <div style={{ height: '450px' }}>
+                <MapContainer center={[location.lat, location.lng]} zoom={13} style={{ height: '100%' }}>
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                  <Marker position={[location.lat, location.lng]}><Popup>You are here</Popup></Marker>
+                  {zones.map(z => (
+                    <Circle 
+                      key={z.id} center={[z.lat, z.lng]} radius={z.radius} 
+                      pathOptions={{ color: z.category === "High Danger" ? 'red' : z.category === "Danger" ? 'orange' : 'green' }} 
+                    />
+                  ))}
+                </MapContainer>
+              </div>
+            </Card.Body>
+          </Card>
+        </Col>
+
+        {/* COLUMN 2: PLACES & AUTO-CONTACTS */}
+        <Col lg={4}>
+          <Card className="shadow-sm border-0 rounded-4 mb-4">
+            <Card.Header className="bg-white fw-bold py-3"><Compass size={18} className="me-2 text-success"/>Places (10km)</Card.Header>
+            <ListGroup variant="flush">
+              {nearbyPlaces.map(p => (
+                <ListGroup.Item key={p.id} className="small d-flex justify-content-between">
+                  {p.name} <Badge bg="light" className="text-dark">{p.city}</Badge>
+                </ListGroup.Item>
               ))}
-              <RecenterMap coords={location} />
-            </MapContainer>
-          </div>
+            </ListGroup>
+          </Card>
 
-          <div className="p-4 bg-white">
-            <Row className="mb-4 text-center g-3">
-              <Col xs={6}>
-                <Card className="border-0 bg-light p-2">
-                  <small className="text-muted d-block">Nearest Zone</small>
-                  <span className="fw-bold">{nearestZone ? nearestZone.name : "N/A"}</span>
-                </Card>
-              </Col>
-              <Col xs={6}>
-                <Card className="border-0 bg-light p-2">
-                  <small className="text-muted d-block">Distance</small>
-                  <span className="fw-bold">{nearestZone ? `${(nearestZone.dist / 1000).toFixed(2)} km` : "..."}</span>
-                </Card>
-              </Col>
-            </Row>
-            <Button variant="danger" className="btn-pill-gradient w-100 py-3 fw-bold border-0 shadow" onClick={() => alert("SOS Alert Sent!")}>
-              <ShieldAlert className="me-2" /> SOS EMERGENCY
-            </Button>
-          </div>
-        </div>
-      </motion.div>
+          <Card className="shadow-sm border-0 rounded-4">
+            <Card.Header className="bg-white fw-bold py-3 text-danger"><Phone size={18} className="me-2"/>Local Help ({city})</Card.Header>
+            <ListGroup variant="flush">
+              {contacts.map((c, i) => (
+                <ListGroup.Item key={i} className="d-flex justify-content-between align-items-center small">
+                  {c.service} <Button size="sm" variant="outline-danger" href={`tel:${c.number}`}>{c.number}</Button>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          </Card>
+        </Col>
+      </Row>
     </Container>
   );
 };
