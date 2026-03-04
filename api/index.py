@@ -214,43 +214,77 @@ def delete_safe_zone(zone_id: int, db: Session = Depends(get_db)):
 @app.get("/api/places")
 def get_places(db: Session = Depends(get_db)):
     return db.query(Place).all()
-
 @app.post("/api/admin/places")
 async def add_place_with_remote_ai(place: dict, db: Session = Depends(get_db)):
+    p_name = place.get('name', 'Unknown Place')
+    lat = float(place.get('lat', 0)) if place.get('lat') else None
+    lng = float(place.get('lng', 0)) if place.get('lng') else None
+
     # 1. Save the primary Place to PostgreSQL
     new_place = Place(
-        name=place['name'], 
-        city=place['city'], 
-        img=place['img'], 
-        details=place['details']
+        name=p_name, 
+        city=place.get('city', ''), 
+        img=place.get('img', ''), 
+        details=place.get('details', ''),
+        lat=lat,
+        lng=lng
     )
     db.add(new_place)
-    db.flush() # Get ID for relationships if needed
+    db.flush() 
     
-    lat, lng = place.get('lat'), place.get('lng')
-    
-    # 2. CALL HUGGING FACE AI ENGINE
-    category = "Safe" # Default fallback
+    # 2. FETCH REAL TYPE & RATING FROM GOOGLE PLACES API
+    p_type = "Tourist Attraction" # Default fallback
+    p_rating = 4.5                # Default fallback
+    p_fee = float(place.get('fee', 0)) # Fee usually isn't in Google API, keep user input or 0
+
+    if lat and lng and GOOGLE_API_KEY:
+        try:
+            async with httpx.AsyncClient() as client:
+                # Search for the specific place using its name and coordinates
+                target_search_url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={p_name}&location={lat},{lng}&radius=1000&key={GOOGLE_API_KEY}"
+                g_res = await client.get(target_search_url)
+                
+                if g_res.status_code == 200:
+                    results = g_res.json().get('results', [])
+                    if results:
+                        top_match = results[0]
+                        
+                        # Extract Rating
+                        p_rating = float(top_match.get('rating', 4.5))
+                        
+                        # Extract Type (Google returns a list, e.g., ['hindu_temple', 'point_of_interest', 'establishment'])
+                        types_list = top_match.get('types', [])
+                        
+                        # Filter out generic tags to get the most meaningful type
+                        generic_tags = {'point_of_interest', 'establishment', 'tourist_attraction'}
+                        meaningful_types = [t for t in types_list if t not in generic_tags]
+                        
+                        if meaningful_types:
+                            # Convert 'hindu_temple' to 'Hindu Temple' for the AI
+                            p_type = meaningful_types[0].replace('_', ' ').title()
+                        elif types_list:
+                            p_type = types_list[0].replace('_', ' ').title()
+                            
+                        print(f"✅ Google API fetched real data -> Type: {p_type}, Rating: {p_rating}")
+        except Exception as e:
+            print(f"Google Type Fetch Error: {e}")
+
+    # 3. CALL HUGGING FACE AI ENGINE WITH REAL DATA
+    category = "Safe"
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            # Send data to Hugging Face
-            # Ensure the order matches your Gradio app.py inputs: [type, rating, fee]
             response = await client.post(HF_API_URL, json={
-                "data": [place['type'], float(place['rating']), float(place['fee'])]
+                "data": [p_type, p_rating, p_fee]
             })
             
             if response.status_code == 200:
                 event_id = response.json().get("event_id")
-                # Gradio uses server-sent events or polling; we poll the result endpoint
                 result_url = f"{HF_API_URL}/{event_id}"
                 
-                # We wait a brief moment for the AI to process
                 await asyncio.sleep(0.5) 
                 result_res = await client.get(result_url)
                 
-                # Gradio response parsing (data is typically in a list)
                 prediction_data = result_res.json()
-                # Note: Adjust index based on your Gradio output
                 prediction = prediction_data.get('data', [0])[0] 
                 
                 categories_map = {0: "Safe", 1: "Danger", 2: "High Danger"}
@@ -258,54 +292,63 @@ async def add_place_with_remote_ai(place: dict, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Hugging Face API Error: {e}")
 
-    # 3. Save the AI-determined Primary Zone
-    db.add(SafeZone(
-        name=f"AI PROFILE: {place['name']}",
-        lat=lat, lng=lng, radius=1000,
-        category=category
-    ))
+    # 4. Save the AI-determined Primary Zone
+    if lat is not None and lng is not None:
+        db.add(SafeZone(
+            name=f"AI PROFILE: {p_name} ({p_type})", # Now includes the real type in the name!
+            lat=lat, lng=lng, radius=1000,
+            category=category
+        ))
 
-    # 4. GOOGLE PLACES: Generate surrounding Safe/Danger/Neutral zones
+    total_zones_added = 1
+
+    # 5. GOOGLE PLACES: Generate surrounding Safe/Danger/Neutral zones (5KM Radius)
     if lat and lng and GOOGLE_API_KEY:
         async with httpx.AsyncClient() as client:
-            target_types = "police|hospital|liquor_store|night_club|bar|bank"
-            g_res = await client.get(
-                f"{GOOGLE_SEARCH_URL}?location={lat},{lng}&radius=4000&type={target_types}&key={GOOGLE_API_KEY}"
-            )
+            search_types = ["police", "hospital", "liquor_store", "night_club", "bar"]
             
-            if g_res.status_code == 200:
-                results = g_res.json().get('results', [])
-                
-                # Logic to add 2-3 of each as requested
-                counts = {"Safe": 0, "Danger": 0, "High Danger": 0}
-                limit = 3
+            # Execute all requests concurrently with a 5000m (5km) radius
+            tasks = [
+                client.get(f"{GOOGLE_SEARCH_URL}?location={lat},{lng}&radius=5000&type={t}&key={GOOGLE_API_KEY}")
+                for t in search_types
+            ]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            counts = {"Safe": 0, "Danger": 0, "High Danger": 0}
+            limit = 3
 
-                for item in results:
-                    poi_types = item.get('types', [])
-                    poi_name = item['name']
+            for res in responses:
+                if isinstance(res, httpx.Response) and res.status_code == 200:
+                    results = res.json().get('results', [])
                     
-                    if any(t in poi_types for t in ["police", "hospital"]) and counts["Safe"] < limit:
-                        cat, rad, prefix = "Safe", 500, "SAFE HUB"
-                        counts["Safe"] += 1
-                    elif "night_club" in poi_types and counts["High Danger"] < limit:
-                        cat, rad, prefix = "High Danger", 300, "CRITICAL"
-                        counts["High Danger"] += 1
-                    elif any(t in poi_types for t in ["liquor_store", "bar"]) and counts["Danger"] < limit:
-                        cat, rad, prefix = "Danger", 400, "CAUTION"
-                        counts["Danger"] += 1
-                    else:
-                        cat, rad, prefix = "Neutral", 450, "ZONE"
-
-                    db.add(SafeZone(
-                        name=f"{prefix}: {poi_name}",
-                        lat=item['geometry']['location']['lat'],
-                        lng=item['geometry']['location']['lng'],
-                        radius=rad,
-                        category=cat
-                    ))
+                    for item in results:
+                        poi_types = item.get('types', [])
+                        poi_name = item.get('name', 'Unknown')
+                        
+                        if any(t in poi_types for t in ["police", "hospital"]) and counts["Safe"] < limit:
+                            cat, rad, prefix = "Safe", 500, "SAFE HUB"
+                            counts["Safe"] += 1
+                        elif "night_club" in poi_types and counts["High Danger"] < limit:
+                            cat, rad, prefix = "High Danger", 300, "CRITICAL"
+                            counts["High Danger"] += 1
+                        elif any(t in poi_types for t in ["liquor_store", "bar"]) and counts["Danger"] < limit:
+                            cat, rad, prefix = "Danger", 400, "CAUTION"
+                            counts["Danger"] += 1
+                        else:
+                            continue
+                        
+                        db.add(SafeZone(
+                            name=f"{prefix}: {poi_name}",
+                            lat=item['geometry']['location']['lat'],
+                            lng=item['geometry']['location']['lng'],
+                            radius=rad,
+                            category=cat
+                        ))
+                        total_zones_added += 1
 
     db.commit()
-    return {"message": f"Place added. AI Category: {category}", "zones_added": len(results)}
+    return {"message": f"Place added. AI Category: {category} (Type: {p_type})", "zones_added": total_zones_added}
+
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):
     db_place = db.query(Place).filter(Place.id == place_id).first()
