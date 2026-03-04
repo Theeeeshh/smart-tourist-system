@@ -11,14 +11,19 @@ import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 let DefaultIcon = L.icon({ iconUrl: markerIcon, shadowUrl: markerShadow, iconSize: [25, 41], iconAnchor: [12, 41] });
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// Helper: Smooth Panning
-function MapPanTo({ target }) {
+// Helper: Smooth Panning with Debounce (Wait for typing to pause)
+function MapPanTo({ position }) {
   const map = useMap();
   useEffect(() => {
-    if (target && target.lat && target.lng) {
-      map.flyTo([target.lat, target.lng], 15, { duration: 1.5 });
-    }
-  }, [target, map]);
+    if (!position || isNaN(position[0]) || isNaN(position[1])) return;
+    
+    // Wait 500ms after the last keystroke before panning the map
+    const timeoutId = setTimeout(() => {
+      map.panTo(position, { animate: true, duration: 0.8 });
+    }, 500);
+
+    return () => clearTimeout(timeoutId);
+  }, [position, map]);
   return null;
 }
 
@@ -35,12 +40,11 @@ const Admin = () => {
   const [safeZones, setSafeZones] = useState([]);
   const [places, setPlaces] = useState([]);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [mapTarget, setMapTarget] = useState(null);
   
   const [placeSearch, setPlaceSearch] = useState("");
   const [zoneSearch, setZoneSearch] = useState("");
 
-  // CRUD States matching index.py
+  // CRUD States
   const defaultPlace = { name: '', city: '', img: '', details: '', lat: '', lng: '', type: 'Temple', rating: 4.5, fee: 0 };
   const [newPlace, setNewPlace] = useState(defaultPlace);
   const [editPlace, setEditPlace] = useState(null);
@@ -84,25 +88,35 @@ const Admin = () => {
     e.preventDefault();
     const method = editPlace ? 'PUT' : 'POST';
     const url = editPlace ? `/api/admin/places/${editPlace.id}` : '/api/admin/places';
+    
+    const payload = {
+        ...(editPlace || newPlace),
+        lat: parseFloat((editPlace || newPlace).lat),
+        lng: parseFloat((editPlace || newPlace).lng),
+    };
+
     await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editPlace || newPlace)
+      body: JSON.stringify(payload)
     });
     setEditPlace(null);
     setNewPlace(defaultPlace);
     fetchData();
   };
 
-  // ADDED: Missing handleZoneSubmit function
   const handleZoneSubmit = async (e) => {
     e.preventDefault();
-    // Note: Your index.py doesn't show a POST for manual zones yet, 
-    // but the frontend requires it for your "Define Safe Zone" form.
+    const payload = {
+        ...newZone,
+        lat: parseFloat(newZone.lat),
+        lng: parseFloat(newZone.lng),
+    };
+
     await fetch('/api/admin/safe-zones', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newZone)
+      body: JSON.stringify(payload)
     });
     setNewZone(defaultZone);
     fetchData();
@@ -114,6 +128,20 @@ const Admin = () => {
       fetchData();
     }
   };
+
+  // NEW: Determine the active draft coordinates for the live marker
+  // It follows the same priority as your handleMapClick function.
+  let draftLat = NaN, draftLng = NaN;
+  if (editPlace && editPlace.lat !== '') {
+    draftLat = parseFloat(editPlace.lat); draftLng = parseFloat(editPlace.lng);
+  } else if (editZone && editZone.lat !== '') {
+    draftLat = parseFloat(editZone.lat); draftLng = parseFloat(editZone.lng);
+  } else if (newZone.lat !== '') {
+    draftLat = parseFloat(newZone.lat); draftLng = parseFloat(newZone.lng);
+  } else if (newPlace.lat !== '') {
+    draftLat = parseFloat(newPlace.lat); draftLng = parseFloat(newPlace.lng);
+  }
+  const previewPosition = (!isNaN(draftLat) && !isNaN(draftLng)) ? [draftLat, draftLng] : null;
 
   if (initialLoading) return (
     <Container className="d-flex justify-content-center align-items-center" style={{height: '100vh'}}>
@@ -128,25 +156,57 @@ const Admin = () => {
           <Card className="shadow-sm border-0 rounded-4 overflow-hidden" style={{ height: '400px' }}>
             <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: '100%' }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <MapPanTo target={mapTarget} />
+              
               <MapClickHandler onMapClick={handleMapClick} />
-              {tourists.map(t => t.last_lat && (
-                <Marker key={t.id} position={[t.last_lat, t.last_lng]}>
-                  <Popup><strong>{t.username}</strong><br/>{t.is_online ? "🟢 Online" : "⚪ Offline"}</Popup>
-                </Marker>
-              ))}
-              {safeZones.map(z => (
-                <Circle 
-                  key={z.id} 
-                  center={[z.lat, z.lng]} 
-                  radius={z.radius} 
-                  pathOptions={{ 
-                    color: z.category === 'High Danger' ? 'black' : z.category === 'Danger' ? 'red' : 'green',
-                    fillColor: z.category === 'High Danger' ? 'black' : z.category === 'Danger' ? 'red' : 'green',
-                    fillOpacity: 0.2
-                  }} 
-                />
-              ))}
+              
+              {/* Dynamic Panning to typed coordinates */}
+              <MapPanTo position={previewPosition} />
+
+              {/* NEW: Live Interactive Draft Marker */}
+              {previewPosition && (
+                <>
+                  <Marker position={previewPosition} opacity={0.8}>
+                    <Popup>📍 <strong>Draft Location</strong><br/>Updates as you type!</Popup>
+                  </Marker>
+                  {/* Adds a cool dashed ring around the draft marker so it stands out */}
+                  <Circle 
+                    center={previewPosition} 
+                    radius={1500} 
+                    pathOptions={{ color: '#0d6efd', fillOpacity: 0.1, dashArray: '5, 10' }} 
+                  />
+                </>
+              )}
+              
+              {/* Existing Tourists */}
+              {tourists.map(t => {
+                const lat = parseFloat(t.last_lat);
+                const lng = parseFloat(t.last_lng);
+                if (isNaN(lat) || isNaN(lng)) return null;
+                return (
+                  <Marker key={t.id} position={[lat, lng]}>
+                    <Popup><strong>{t.username}</strong><br/>{t.is_online ? "🟢 Online" : "⚪ Offline"}</Popup>
+                  </Marker>
+                );
+              })}
+
+              {/* Existing Safe Zones */}
+              {safeZones.map(z => {
+                const lat = parseFloat(z.lat);
+                const lng = parseFloat(z.lng);
+                if (isNaN(lat) || isNaN(lng)) return null;
+                return (
+                  <Circle 
+                    key={z.id} 
+                    center={[lat, lng]} 
+                    radius={z.radius} 
+                    pathOptions={{ 
+                      color: z.category === 'High Danger' ? 'black' : z.category === 'Danger' ? 'red' : 'green',
+                      fillColor: z.category === 'High Danger' ? 'black' : z.category === 'Danger' ? 'red' : 'green',
+                      fillOpacity: 0.2
+                    }} 
+                  />
+                );
+              })}
             </MapContainer>
           </Card>
         </Col>
@@ -161,8 +221,22 @@ const Admin = () => {
               <Form.Control size="sm" className="mb-2" placeholder="Place Name" value={editPlace?.name || newPlace.name} onChange={e => editPlace ? setEditPlace({...editPlace, name: e.target.value}) : setNewPlace({...newPlace, name: e.target.value})} required />
               <Form.Control size="sm" className="mb-2" placeholder="City" value={editPlace?.city || newPlace.city} onChange={e => editPlace ? setEditPlace({...editPlace, city: e.target.value}) : setNewPlace({...newPlace, city: e.target.value})} />
               <Row className="g-2 mb-2">
-                <Col><Form.Control size="sm" placeholder="Lat" value={editPlace?.lat || newPlace.lat} readOnly /></Col>
-                <Col><Form.Control size="sm" placeholder="Lng" value={editPlace?.lng || newPlace.lng} readOnly /></Col>
+                <Col>
+                  <Form.Control 
+                    size="sm" 
+                    placeholder="Lat" 
+                    value={editPlace?.lat ?? newPlace.lat} 
+                    onChange={e => editPlace ? setEditPlace({...editPlace, lat: e.target.value}) : setNewPlace({...newPlace, lat: e.target.value})} 
+                  />
+                </Col>
+                <Col>
+                  <Form.Control 
+                    size="sm" 
+                    placeholder="Lng" 
+                    value={editPlace?.lng ?? newPlace.lng} 
+                    onChange={e => editPlace ? setEditPlace({...editPlace, lng: e.target.value}) : setNewPlace({...newPlace, lng: e.target.value})} 
+                  />
+                </Col>
               </Row>
               <Form.Control size="sm" className="mb-2" placeholder="Image URL" value={editPlace?.img || newPlace.img} onChange={e => editPlace ? setEditPlace({...editPlace, img: e.target.value}) : setNewPlace({...newPlace, img: e.target.value})} />
               <Form.Control as="textarea" size="sm" rows={3} className="mb-3" placeholder="Details..." value={editPlace?.details || newPlace.details} onChange={e => editPlace ? setEditPlace({...editPlace, details: e.target.value}) : setNewPlace({...newPlace, details: e.target.value})} />
@@ -206,8 +280,22 @@ const Admin = () => {
             <Form onSubmit={handleZoneSubmit}>
               <Form.Control size="sm" className="mb-2" placeholder="Zone Name" value={newZone.name} onChange={e => setNewZone({...newZone, name: e.target.value})} required />
               <Row className="g-2 mb-2">
-                <Col><Form.Control size="sm" placeholder="Lat" value={newZone.lat} readOnly /></Col>
-                <Col><Form.Control size="sm" placeholder="Lng" value={newZone.lng} readOnly /></Col>
+                <Col>
+                  <Form.Control 
+                    size="sm" 
+                    placeholder="Lat" 
+                    value={newZone.lat} 
+                    onChange={e => setNewZone({...newZone, lat: e.target.value})} 
+                  />
+                </Col>
+                <Col>
+                  <Form.Control 
+                    size="sm" 
+                    placeholder="Lng" 
+                    value={newZone.lng} 
+                    onChange={e => setNewZone({...newZone, lng: e.target.value})} 
+                  />
+                </Col>
               </Row>
               <Form.Control size="sm" className="mb-3" type="number" placeholder="Radius (meters)" value={newZone.radius} onChange={e => setNewZone({...newZone, radius: e.target.value})} required />
               <Button type="submit" className="w-100 border-0 fw-bold py-2 rounded-pill" style={{ background: 'linear-gradient(90deg, #ff4b2b, #ff416c)' }}>
