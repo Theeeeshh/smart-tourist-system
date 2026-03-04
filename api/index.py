@@ -312,63 +312,90 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
     db.add(new_p)
     db.commit() 
     
-    # 2. Trigger the AI to analyze the location via Wikipedia
+    # 2. Trigger the Hybrid AI (HF + Wiki) to analyze and generate multiple zones
     if lat and lng: 
-        background_tasks.add_task(generate_wiki_smart_zones, place.get('name'), lat, lng)
+        # Pass necessary data for the HF model (type, rating, fee)
+        p_type = place.get('type', 'tourist attraction')
+        p_rating = float(place.get('rating', 4.0))
+        p_fee = float(place.get('fee', 0.0))
         
-    return {"message": "Place saved. Wikipedia AI is analyzing safety zones..."}
+        background_tasks.add_task(
+            generate_hybrid_smart_zones, 
+            place.get('name'), lat, lng, p_type, p_rating, p_fee
+        )
+        
+    return {"message": "Place saved. RakshaSetu Hybrid AI is generating safety zones..."}
 
-async def generate_wiki_smart_zones(p_name: str, lat: float, lng: float):
+async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_type: str, p_rating: float, p_fee: float):
     db = SessionLocal()
     headers = {"User-Agent": "RakshaSetu/1.0 (sunilpandab37@gmail.com)"}
     
-    # Ask Wikipedia for the description of this specific place
-    wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=description&titles={p_name}&format=json"
-
     try:
+        # --- PHASE 1: HF AI PRIMARY CATEGORY ---
+        # Get the main safety classification for the added place itself
+        main_category = await get_smart_safety_category(p_name, p_type, lat, lng, p_rating, p_fee, db)
+        
+        db.add(SafeZone(
+            name=f"RakshaSetu AI: {p_name}",
+            lat=lat, lng=lng,
+            radius=1000,
+            category=main_category,
+            source="HF-AI"
+        ))
+
+        # --- PHASE 2: WIKIPEDIA NEARBY DISCOVERY ---
+        # Search for nearby places within 5km to create additional context zones
+        wiki_nearby_url = (
+            f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
+            f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=20&prop=description|coordinates&format=json"
+        )
+        
         async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
-            res = await client.get(wiki_url)
-            description = ""
+            res = await client.get(wiki_nearby_url)
             if res.status_code == 200:
                 pages = res.json().get('query', {}).get('pages', {})
-                for vid in pages:
-                    description = pages[vid].get('description', '').lower()
+                
+                safe_count = 0
+                danger_count = 0
+                
+                for _, info in pages.items():
+                    desc = info.get('description', '').lower()
+                    title = info.get('title', '').lower()
+                    coords = info.get('coordinates', [{}])[0]
+                    p_lat, p_lng = coords.get('lat'), coords.get('lon')
+                    
+                    if p_lat is None or p_lng is None: continue
 
-            # --- AI LOGIC: ANALYZE DESCRIPTION FOR SAFETY ---
-            category = "Safe"
-            radius = 500
-            t_start, t_end = None, None
+                    # Logic for 2-3 Danger Zones (Nightlife, Isolated areas)
+                    if danger_count < 3 and any(w in desc or w in title for w in ["bar", "club", "pub", "liquor", "forest", "isolated"]):
+                        db.add(SafeZone(
+                            name=f"Wiki-Alert: {info.get('title')}",
+                            lat=p_lat, lng=p_lng,
+                            radius=400,
+                            category="High Danger" if "club" in desc else "Danger",
+                            active_from=dt_time(20, 0), active_to=dt_time(4, 0),
+                            source="Wiki-AI"
+                        ))
+                        danger_count += 1
+                    
+                    # Logic for 2-3 Safe Zones (Police, Hospitals, Religious sites, Gov buildings)
+                    elif safe_count < 3 and any(w in desc or w in title for w in ["police", "hospital", "temple", "church", "shrine", "government", "embassy"]):
+                        db.add(SafeZone(
+                            name=f"Wiki-Safe: {info.get('title')}",
+                            lat=p_lat, lng=p_lng,
+                            radius=500,
+                            category="Safe",
+                            source="Wiki-AI"
+                        ))
+                        safe_count += 1
+                        
+                    if safe_count >= 3 and danger_count >= 3: break
 
-            # High Danger Keywords
-            if any(word in description for word in ["nightclub", "bar", "liquor", "pub"]):
-                category, radius = "High Danger", 300
-                t_start, t_end = dt_time(21, 0), dt_time(4, 0) # Active at night
-            
-            # Danger Keywords (Parks/Beaches at night)
-            elif any(word in description for word in ["park", "forest", "beach", "lake", "isolated"]):
-                category, radius = "Danger", 600
-                t_start, t_end = dt_time(19, 0), dt_time(6, 0) # Active after sunset
-            
-            # Safe Keywords
-            elif any(word in description for word in ["police", "hospital", "temple", "shrine", "government"]):
-                category, radius = "Safe", 500
-
-            # 3. Create the Geofence in the Database
-            db.add(SafeZone(
-                name=f"Wiki-AI: {p_name}",
-                lat=lat, lng=lng,
-                radius=radius,
-                category=category,
-                active_from=t_start,
-                active_to=t_end,
-                source="Wikipedia-AI"
-            ))
-            db.commit()
+        db.commit()
     except Exception as e:
-        print(f"Wiki AI Generation Error: {e}")
+        print(f"Hybrid AI Generation Error: {e}")
     finally:
         db.close()
-
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):
     db_place = db.query(Place).filter(Place.id == place_id).first()
