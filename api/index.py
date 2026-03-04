@@ -128,48 +128,60 @@ def report_sos_incident(loc: LocationUpdate, db: Session = Depends(get_db)):
     return {"message": "Danger zone mapped."}
 
 @app.get("/api/tourist/explore-google")
-async def explore_nearby_free(lat: float, lng: float, radius: int = 10000):
+async def explore_nearby_free(lat: float, lng: float, db: Session = Depends(get_db)):
     """
-    Uses the Wikipedia Geosearch API.
+    Uses the Wikipedia Geosearch API + Internal Database Failsafe.
     100% Free. NO API Keys. NO Billing. 
-    Finds notable historical sites and landmarks around the user.
     """
-    # Wikipedia expects radius in meters (max 10000m or 10km for their API)
+    places = []
+    
+    # 1. Ask Wikipedia for nearby landmarks (10km radius max for Wiki API)
     wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord={lat}|{lng}&gsradius=10000&gslimit=15&format=json"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.get(wiki_url)
-            
             if res.status_code == 200:
                 wiki_data = res.json().get('query', {}).get('geosearch', [])
-                places = []
-                
                 for item in wiki_data:
                     p_lat = item.get('lat')
                     p_lng = item.get('lon')
-                    name = item.get('title')
                     
                     # Calculate exact distance for the React UI
                     dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
                     
                     places.append({
                         "id": str(item.get('pageid')),
-                        "name": name,
-                        "lat": p_lat,
+                        "name": item.get('title'),
+                        "lat": p_lat, 
                         "lng": p_lng,
-                        "rating": "Wiki", # Shows the user it's a notable historical site
+                        "rating": "Wiki", # Shows it's a historical/notable site
                         "distance": dist
                     })
-                
-                # Sort by closest first and return top 10
-                places.sort(key=lambda x: x['distance'])
-                return places[:10]
-            else:
-                return []
     except Exception as e:
         print(f"Wikipedia API Error: {e}")
-        return []
+
+    # 2. FAILSAFE: If Wikipedia fails or finds < 10 places, grab from your Database!
+    if len(places) < 10:
+        internal_places = db.query(Place).all()
+        for p in internal_places:
+            if p.lat and p.lng: # Ensure coordinates exist
+                dist = math.sqrt((lat - p.lat)**2 + (lng - p.lng)**2) * 111
+                
+                # Add to list if it's not already found by Wikipedia
+                if not any(p.name.lower() in wp['name'].lower() for wp in places):
+                    places.append({
+                        "id": f"db_{p.id}", 
+                        "name": p.name, 
+                        "lat": p.lat, 
+                        "lng": p.lng, 
+                        "rating": "Local", # Marks that it came from your database
+                        "distance": dist
+                    })
+
+    # 3. Sort by closest first and return top 10
+    places.sort(key=lambda x: x['distance'])
+    return places[:10]
 @app.get("/api/admin/tourists")
 def get_all_tourists(db: Session = Depends(get_db)):
     users = db.query(User).filter(User.is_admin == False).all()
