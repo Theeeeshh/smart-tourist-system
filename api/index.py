@@ -138,7 +138,7 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
     # 1. Fetch nearby pages with their descriptions (prop=description)
     wiki_url = (
         f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-        f"&ggscoord={lat}|{lng}&ggsradius=100000&ggslimit=20"
+        f"&ggscoord={lat}|{lng}&ggsradius=50000&ggslimit=20"
         f"&prop=description|coordinates&format=json"
     )
 
@@ -152,7 +152,7 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
                 tourist_keywords = [
                     "temple", "monument", "museum", "park", "beach", "palace", 
                     "historic", "sanctuary", "landmark", "fort", "lake", "waterfall", 
-                    "church", "mosque", "garden", "wildlife", "conservation", "nature"
+                    "church", "mosque", "garden", "wildlife", "conservation", "nature","park"
                 ]
 
                 for page_id, info in data.items():
