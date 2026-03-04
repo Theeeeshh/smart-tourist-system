@@ -127,32 +127,49 @@ def report_sos_incident(loc: LocationUpdate, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Danger zone mapped."}
 
-@app.post("/api/update-location")
-def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.username == loc.username).first()
-    if not db_user: raise HTTPException(status_code=404)
-    
-    # 1. Safely update PostgreSQL (The permanent record)
-    db_user.last_lat, db_user.last_lng = loc.lat, loc.lng
-    db.commit()
-    
-    # 2. Self-Healing Redis Update (For the Admin Dashboard "Online" status)
-    redis_payload = json.dumps({"lat": loc.lat, "lng": loc.lng})
+@app.get("/api/tourist/explore-google")
+async def explore_nearby_free(lat: float, lng: float, radius: int = 10000):
+    """
+    Uses the Wikipedia Geosearch API.
+    100% Free. NO API Keys. NO Billing. 
+    Finds notable historical sites and landmarks around the user.
+    """
+    # Wikipedia expects radius in meters (max 10000m or 10km for their API)
+    wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord={lat}|{lng}&gsradius=10000&gslimit=15&format=json"
+
     try:
-        r.setex(f"live_loc:{loc.username}", 60, redis_payload)
-    except redis.exceptions.ConnectionError:
-        # Vercel froze the connection. Disconnect the broken pool and retry once.
-        print("Redis connection stale. Reconnecting...")
-        r.connection_pool.disconnect()
-        try:
-            r.setex(f"live_loc:{loc.username}", 60, redis_payload)
-        except Exception as e:
-            print(f"Redis secondary fail: {e}")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(wiki_url)
+            
+            if res.status_code == 200:
+                wiki_data = res.json().get('query', {}).get('geosearch', [])
+                places = []
+                
+                for item in wiki_data:
+                    p_lat = item.get('lat')
+                    p_lng = item.get('lon')
+                    name = item.get('title')
+                    
+                    # Calculate exact distance for the React UI
+                    dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
+                    
+                    places.append({
+                        "id": str(item.get('pageid')),
+                        "name": name,
+                        "lat": p_lat,
+                        "lng": p_lng,
+                        "rating": "Wiki", # Shows the user it's a notable historical site
+                        "distance": dist
+                    })
+                
+                # Sort by closest first and return top 10
+                places.sort(key=lambda x: x['distance'])
+                return places[:10]
+            else:
+                return []
     except Exception as e:
-        print(f"Redis general fail: {e}")
-        
-    status, alert_level = get_safety_status(loc.lat, loc.lng, db)
-    return {"status": status, "alert_level": alert_level, "lat": loc.lat, "lng": loc.lng}
+        print(f"Wikipedia API Error: {e}")
+        return []
 @app.get("/api/admin/tourists")
 def get_all_tourists(db: Session = Depends(get_db)):
     users = db.query(User).filter(User.is_admin == False).all()
