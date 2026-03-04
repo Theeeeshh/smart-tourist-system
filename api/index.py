@@ -94,15 +94,24 @@ def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == loc.username).first()
     if not db_user: raise HTTPException(status_code=404)
     
-    # 1. Safely update PostgreSQL
+    # 1. Safely update PostgreSQL (The permanent record)
     db_user.last_lat, db_user.last_lng = loc.lat, loc.lng
     db.commit()
     
-    # 2. FIX 2: Safely try to update Redis without crashing the API if Vercel TCP is frozen
+    # 2. Self-Healing Redis Update (For the Admin Dashboard "Online" status)
+    redis_payload = json.dumps({"lat": loc.lat, "lng": loc.lng})
     try:
-        r.setex(f"live_loc:{loc.username}", 60, json.dumps({"lat": loc.lat, "lng": loc.lng}))
+        r.setex(f"live_loc:{loc.username}", 60, redis_payload)
+    except redis.exceptions.ConnectionError:
+        # Vercel froze the connection. Disconnect the broken pool and retry once.
+        print("Redis connection stale. Reconnecting...")
+        r.connection_pool.disconnect()
+        try:
+            r.setex(f"live_loc:{loc.username}", 60, redis_payload)
+        except Exception as e:
+            print(f"Redis secondary fail: {e}")
     except Exception as e:
-        print(f"Redis silent fail (normal on Vercel): {e}")
+        print(f"Redis general fail: {e}")
         
     status, alert_level = get_safety_status(loc.lat, loc.lng, db)
     return {"status": status, "alert_level": alert_level, "lat": loc.lat, "lng": loc.lng}
