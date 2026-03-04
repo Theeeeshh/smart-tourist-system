@@ -298,10 +298,10 @@ async def generate_zones_background(p_name: str, lat: float, lng: float, p_type:
 
 @app.post("/api/admin/places")
 async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # 1. Save the basic place info to the DB
     lat = float(place.get('lat')) if place.get('lat') else None
     lng = float(place.get('lng')) if place.get('lng') else None
     
+    # 1. Save the main place record
     new_p = Place(
         name=place.get('name', 'Unknown'), 
         city=place.get('city', ''), 
@@ -312,11 +312,11 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
     db.add(new_p)
     db.commit() 
     
-    # 2. Trigger the Hybrid AI (HF + Wiki) to analyze and generate multiple zones
+    # 2. Trigger Hybrid AI to find 2-3 Safe and 2-3 Danger zones nearby
     if lat and lng: 
-        # Pass necessary data for the HF model (type, rating, fee)
+        # Extract variables for HF model
         p_type = place.get('type', 'tourist attraction')
-        p_rating = float(place.get('rating', 4.0))
+        p_rating = float(place.get('rating', 4.5))
         p_fee = float(place.get('fee', 0.0))
         
         background_tasks.add_task(
@@ -324,41 +324,40 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
             place.get('name'), lat, lng, p_type, p_rating, p_fee
         )
         
-    return {"message": "Place saved. RakshaSetu Hybrid AI is generating safety zones..."}
+    return {"message": "Place saved. Analyzing 5km radius for safety/danger zones..."}
 
 async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_type: str, p_rating: float, p_fee: float):
     db = SessionLocal()
     headers = {"User-Agent": "RakshaSetu/1.0 (sunilpandab37@gmail.com)"}
     
     try:
-        # --- PHASE 1: HF AI PRIMARY CATEGORY ---
-        # Get the main safety classification for the added place itself
+        # --- PHASE 1: HF AI CATEGORY FOR MAIN SITE ---
+        # Uses your existing HF API logic to classify the main place
         main_category = await get_smart_safety_category(p_name, p_type, lat, lng, p_rating, p_fee, db)
-        
         db.add(SafeZone(
-            name=f"RakshaSetu AI: {p_name}",
-            lat=lat, lng=lng,
-            radius=1000,
-            category=main_category,
-            source="HF-AI"
+            name=f"AI Analysis: {p_name}",
+            lat=lat, lng=lng, radius=1000,
+            category=main_category, source="HF-AI"
         ))
 
-        # --- PHASE 2: WIKIPEDIA NEARBY DISCOVERY ---
-        # Search for nearby places within 5km to create additional context zones
-        wiki_nearby_url = (
+        # --- PHASE 2: WIKIPEDIA GEOSCAN (The fix for multiple zones) ---
+        # We search for everything within 5km of the coordinates
+        wiki_url = (
             f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-            f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=20&prop=description|coordinates&format=json"
+            f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=30&prop=description|coordinates&format=json"
         )
-        
-        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
-            res = await client.get(wiki_nearby_url)
+
+        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+            res = await client.get(wiki_url)
             if res.status_code == 200:
                 pages = res.json().get('query', {}).get('pages', {})
                 
-                safe_count = 0
-                danger_count = 0
+                safe_found, danger_found = 0, 0
                 
                 for _, info in pages.items():
+                    # Stop once we have 3 of each
+                    if safe_found >= 3 and danger_found >= 3: break
+                    
                     desc = info.get('description', '').lower()
                     title = info.get('title', '').lower()
                     coords = info.get('coordinates', [{}])[0]
@@ -366,34 +365,29 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                     
                     if p_lat is None or p_lng is None: continue
 
-                    # Logic for 2-3 Danger Zones (Nightlife, Isolated areas)
-                    if danger_count < 3 and any(w in desc or w in title for w in ["bar", "club", "pub", "liquor", "forest", "isolated"]):
+                    # Identify Danger Zones (Nightlife, Bars, or thick Forests)
+                    if danger_found < 3 and any(w in desc or w in title for w in ["bar", "club", "liquor", "pub", "isolated", "forest"]):
                         db.add(SafeZone(
-                            name=f"Wiki-Alert: {info.get('title')}",
-                            lat=p_lat, lng=p_lng,
-                            radius=400,
-                            category="High Danger" if "club" in desc else "Danger",
-                            active_from=dt_time(20, 0), active_to=dt_time(4, 0),
-                            source="Wiki-AI"
+                            name=f"Wiki-Danger: {info.get('title')}",
+                            lat=p_lat, lng=p_lng, radius=400,
+                            category="Danger",
+                            active_from=dt_time(20, 0), active_to=dt_time(4, 0), # Night only
+                            source="Wikipedia-AI"
                         ))
-                        danger_count += 1
+                        danger_found += 1
                     
-                    # Logic for 2-3 Safe Zones (Police, Hospitals, Religious sites, Gov buildings)
-                    elif safe_count < 3 and any(w in desc or w in title for w in ["police", "hospital", "temple", "church", "shrine", "government", "embassy"]):
+                    # Identify Safe Zones (Religious sites, Hospitals, Police stations)
+                    elif safe_found < 3 and any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government"]):
                         db.add(SafeZone(
                             name=f"Wiki-Safe: {info.get('title')}",
-                            lat=p_lat, lng=p_lng,
-                            radius=500,
-                            category="Safe",
-                            source="Wiki-AI"
+                            lat=p_lat, lng=p_lng, radius=500,
+                            category="Safe", source="Wikipedia-AI"
                         ))
-                        safe_count += 1
-                        
-                    if safe_count >= 3 and danger_count >= 3: break
+                        safe_found += 1
 
         db.commit()
     except Exception as e:
-        print(f"Hybrid AI Generation Error: {e}")
+        print(f"Hybrid AI Error: {e}")
     finally:
         db.close()
 @app.put("/api/admin/places/{place_id}")
