@@ -130,15 +130,17 @@ def report_sos_incident(loc: LocationUpdate, db: Session = Depends(get_db)):
 @app.get("/api/tourist/explore-google")
 async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depends(get_db)):
     """
-    Fetches nearby Wiki articles and filters for Tourist Attractions only.
+    Fetches nearby Wiki articles, filters for Tourist Attractions, 
+    and uses the internal DB as a failsafe.
     """
     places = []
+    # Wikipedia strictly requires a User-Agent header
     headers = {"User-Agent": "RakshaSetu/1.0 (sunilpandab37@gmail.com)"}
     
-    # 1. Fetch nearby pages with their descriptions (prop=description)
+    # 1. Fetch nearby pages with descriptions in one call
     wiki_url = (
         f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-        f"&ggscoord={lat}|{lng}&ggsradius=50000&ggslimit=20"
+        f"&ggscoord={lat}|{lng}&ggsradius=10000&ggslimit=20"
         f"&prop=description|coordinates&format=json"
     )
 
@@ -148,11 +150,11 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
             if res.status_code == 200:
                 data = res.json().get('query', {}).get('pages', {})
                 
-                # Keywords to identify a tourist spot
+                # Keywords to identify a tourist spot from descriptions
                 tourist_keywords = [
                     "temple", "monument", "museum", "park", "beach", "palace", 
                     "historic", "sanctuary", "landmark", "fort", "lake", "waterfall", 
-                    "church", "mosque", "garden", "wildlife", "conservation", "nature","park"
+                    "church", "mosque", "garden", "wildlife", "nature", "ancient"
                 ]
 
                 for page_id, info in data.items():
@@ -161,33 +163,46 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
                     
                     # Filter: Only add if description or title contains tourist keywords
                     if any(word in desc or word in title for word in tourist_keywords):
-                        p_coord = info.get('coordinates', [{}])[0]
-                        p_lat, p_lng = p_coord.get('lat'), p_coord.get('lon')
-                        
-                        if p_lat and p_lng:
-                            dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
-                            places.append({
-                                "id": str(page_id),
-                                "name": info.get('title'),
-                                "lat": p_lat, "lng": p_lng,
-                                "rating": "Wiki", 
-                                "distance": dist
-                            })
+                        coords_list = info.get('coordinates', [])
+                        if coords_list:
+                            p_lat = coords_list[0].get('lat')
+                            p_lng = coords_list[0].get('lon')
+                            
+                            if p_lat is not None and p_lng is not None:
+                                # Calculate distance (1 deg ~ 111km)
+                                dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
+                                places.append({
+                                    "id": str(page_id),
+                                    "name": info.get('title'),
+                                    "lat": p_lat, 
+                                    "lng": p_lng,
+                                    "rating": "Wiki", 
+                                    "distance": dist
+                                })
     except Exception as e:
-        print(f"Filtering Error: {e}")
+        print(f"Wikipedia API Error: {e}")
 
     # 2. FAILSAFE: Use your internal database if Wiki results are low
+    # This prevents the "Scanning..." spinner from getting stuck
     if len(places) < 5:
-        # Same logic as before to fill from the 'Place' table
-        internal = db.query(Place).all()
-        for p in internal:
-            dist = math.sqrt((lat - p.lat)**2 + (lng - p.lng)**2) * 111
-            if not any(p.name.lower() in item['name'].lower() for item in places):
-                places.append({
-                    "id": f"db_{p.id}", "name": p.name, "lat": p.lat, "lng": p.lng,
-                    "rating": "Local", "distance": dist
-                })
+        internal_places = db.query(Place).all()
+        for p in internal_places:
+            # COORDINATE FIX: Explicitly check for None to avoid TypeError
+            if p.lat is not None and p.lng is not None:
+                dist = math.sqrt((lat - p.lat)**2 + (lng - p.lng)**2) * 111
+                
+                # Prevent duplicates (check if already added by Wiki)
+                if not any(p.name.lower() in item['name'].lower() for item in places):
+                    places.append({
+                        "id": f"db_{p.id}", 
+                        "name": p.name, 
+                        "lat": p.lat, 
+                        "lng": p.lng,
+                        "rating": "Local", 
+                        "distance": dist
+                    })
 
+    # Sort by closest first and return top 10 results
     places.sort(key=lambda x: x['distance'])
     return places[:10]
 @app.get("/api/admin/tourists")
