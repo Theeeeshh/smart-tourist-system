@@ -138,7 +138,7 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
     # 1. Fetch nearby pages with their descriptions (prop=description)
     wiki_url = (
         f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-        f"&ggscoord={lat}|{lng}&ggsradius=10000&ggslimit=20"
+        f"&ggscoord={lat}|{lng}&ggsradius=100000&ggslimit=20"
         f"&prop=description|coordinates&format=json"
     )
 
@@ -218,11 +218,7 @@ def get_safe_zones(db: Session = Depends(get_db)):
     now_utc, now_ist_time = datetime.utcnow(), datetime.now(pytz.timezone('Asia/Kolkata')).time()
     return [z for z in db.query(SafeZone).all() if is_zone_active(z, now_utc, now_ist_time)]
 
-@app.post("/api/admin/safe-zones")
-def create_safe_zone(zone_data: dict, db: Session = Depends(get_db)):
-    db.add(SafeZone(name=zone_data.get('name', 'Custom Zone'), lat=float(zone_data['lat']), lng=float(zone_data['lng']), radius=float(zone_data.get('radius', 500)), category=zone_data.get('category', 'Safe')))
-    db.commit()
-    return {"message": "Safe zone created"}
+
 
 @app.delete("/api/admin/safe-zones/{zone_id}")
 def delete_safe_zone(zone_id: int, db: Session = Depends(get_db)):
