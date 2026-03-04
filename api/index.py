@@ -154,7 +154,7 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
                 tourist_keywords = [
                     "temple", "monument", "museum", "park", "beach", "palace", 
                     "historic", "sanctuary", "landmark", "fort", "lake", "waterfall", 
-                    "church", "mosque", "garden", "wildlife", "nature", "ancient"
+                    "church", "mosque", "garden", "wildlife", "nature", "ancient","tourist","places"
                 ]
 
                 for page_id, info in data.items():
