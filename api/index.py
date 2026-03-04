@@ -127,24 +127,32 @@ def report_sos_incident(loc: LocationUpdate, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Danger zone mapped."}
 
-@app.get("/api/tourist/explore-google")
-async def explore_nearby_google(lat: float, lng: float, radius: int = 15000):
-    if not GOOGLE_API_KEY: return []
+@app.post("/api/update-location")
+def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == loc.username).first()
+    if not db_user: raise HTTPException(status_code=404)
+    
+    # 1. Safely update PostgreSQL (The permanent record)
+    db_user.last_lat, db_user.last_lng = loc.lat, loc.lng
+    db.commit()
+    
+    # 2. Self-Healing Redis Update (For the Admin Dashboard "Online" status)
+    redis_payload = json.dumps({"lat": loc.lat, "lng": loc.lng})
     try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"{GOOGLE_SEARCH_URL}?location={lat},{lng}&radius={radius}&type=tourist_attraction&key={GOOGLE_API_KEY}")
-            if res.status_code == 200:
-                places = []
-                for item in res.json().get('results', [])[:10]:
-                    p_lat, p_lng = item['geometry']['location']['lat'], item['geometry']['location']['lng']
-                    dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
-                    places.append({"id": item.get('place_id'), "name": item.get('name'), "lat": p_lat, "lng": p_lng, "rating": item.get('rating', 'New'), "distance": dist})
-                return sorted(places, key=lambda x: x['distance'])
-            return []
+        r.setex(f"live_loc:{loc.username}", 60, redis_payload)
+    except redis.exceptions.ConnectionError:
+        # Vercel froze the connection. Disconnect the broken pool and retry once.
+        print("Redis connection stale. Reconnecting...")
+        r.connection_pool.disconnect()
+        try:
+            r.setex(f"live_loc:{loc.username}", 60, redis_payload)
+        except Exception as e:
+            print(f"Redis secondary fail: {e}")
     except Exception as e:
-        print(f"Google Places Error: {e}") 
-        return []
-
+        print(f"Redis general fail: {e}")
+        
+    status, alert_level = get_safety_status(loc.lat, loc.lng, db)
+    return {"status": status, "alert_level": alert_level, "lat": loc.lat, "lng": loc.lng}
 @app.get("/api/admin/tourists")
 def get_all_tourists(db: Session = Depends(get_db)):
     users = db.query(User).filter(User.is_admin == False).all()
