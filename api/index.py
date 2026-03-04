@@ -308,3 +308,44 @@ def delete_place(place_id: int, db: Session = Depends(get_db)):
         db.delete(db_place)
         db.commit()
     return {"message": "Place deleted successfully"}
+@app.get("/api/tourist/explore-google")
+async def explore_nearby_google(lat: float, lng: float, radius: int = 15000):
+    """
+    Securely fetches real-world nearby tourist attractions from Google Places API.
+    """
+    if not GOOGLE_API_KEY:
+        raise HTTPException(status_code=500, detail="Google API Key missing in backend.")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # We search for 'tourist_attraction' within the given radius
+            url = f"{GOOGLE_SEARCH_URL}?location={lat},{lng}&radius={radius}&type=tourist_attraction&key={GOOGLE_API_KEY}"
+            res = await client.get(url)
+            
+            if res.status_code == 200:
+                google_data = res.json().get('results', [])
+                
+                places = []
+                for item in google_data[:10]: # Limit to top 10 to keep UI clean
+                    # Calculate accurate distance for the UI
+                    p_lat = item['geometry']['location']['lat']
+                    p_lng = item['geometry']['location']['lng']
+                    dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
+                    
+                    places.append({
+                        "id": item.get('place_id'),
+                        "name": item.get('name'),
+                        "lat": p_lat,
+                        "lng": p_lng,
+                        "rating": item.get('rating', 'New'),
+                        "distance": dist
+                    })
+                
+                # Sort by closest first
+                places.sort(key=lambda x: x['distance'])
+                return places
+            else:
+                return []
+    except Exception as e:
+        print(f"Google API Error: {e}")
+        return []
