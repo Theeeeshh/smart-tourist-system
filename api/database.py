@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, Time
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, Time, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from passlib.context import CryptContext
@@ -56,4 +56,29 @@ class IncidentReport(Base):
     lng = Column(Float)
     reported_at = Column(DateTime, default=datetime.utcnow)
 
+
+# --- AUTOMATIC SCHEMA MIGRATION LOGIC ---
+# This forces PostgreSQL to add the missing columns to existing tables
+def migrate_schema():
+    with engine.connect() as conn:
+        try:
+            # Fixes for the Places table
+            conn.execute(text("ALTER TABLE places ADD COLUMN IF NOT EXISTS lat FLOAT;"))
+            conn.execute(text("ALTER TABLE places ADD COLUMN IF NOT EXISTS lng FLOAT;"))
+            
+            # Fixes for the SafeZones table (THIS FIXES YOUR VERCEL ERROR)
+            conn.execute(text("ALTER TABLE safe_zones ADD COLUMN IF NOT EXISTS active_from TIME;"))
+            conn.execute(text("ALTER TABLE safe_zones ADD COLUMN IF NOT EXISTS active_to TIME;"))
+            conn.execute(text("ALTER TABLE safe_zones ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;"))
+            conn.execute(text("ALTER TABLE safe_zones ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'Admin';"))
+            
+            conn.commit()
+            print("Database migration successful. All new columns added.")
+        except Exception as e:
+            print(f"Migration error (this is okay if using SQLite locally): {e}")
+
+# 1. Run the column adder
+migrate_schema()
+
+# 2. Create tables if they don't exist at all (like the new incident_reports table)
 Base.metadata.create_all(bind=engine)
