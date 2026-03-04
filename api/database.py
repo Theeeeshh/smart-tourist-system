@@ -1,10 +1,11 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, Time
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from passlib.context import CryptContext
+from datetime import datetime
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./test.db") 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -27,7 +28,6 @@ class Place(Base):
     city = Column(String)
     img = Column(String)
     details = Column(Text)
-    # Ensure these are in the model so SQLAlchemy recognizes them
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
 
@@ -39,22 +39,21 @@ class SafeZone(Base):
     lng = Column(Float)
     radius = Column(Float)
     category = Column(String, default="Safe") 
+    
+    # Real Google Timings & Heuristic Windows
+    active_from = Column(Time, nullable=True)
+    active_to = Column(Time, nullable=True)
+    
+    # Crowdsourcing Logic
+    expires_at = Column(DateTime, nullable=True)
+    source = Column(String, default="Admin") 
 
-# --- SCHEMA MIGRATION LOGIC ---
-# This runs BEFORE create_all to ensure the table is ready
-def migrate_schema():
-    with engine.connect() as conn:
-        try:
-            # Check if columns exist; if not, add them
-            conn.execute(text("ALTER TABLE places ADD COLUMN IF NOT EXISTS lat FLOAT;"))
-            conn.execute(text("ALTER TABLE places ADD COLUMN IF NOT EXISTS lng FLOAT;"))
-            conn.commit()
-            print("Successfully verified/added lat/lng columns to 'places' table.")
-        except Exception as e:
-            print(f"Migration Note: {e}")
+class IncidentReport(Base):
+    __tablename__ = "incident_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String)
+    lat = Column(Float)
+    lng = Column(Float)
+    reported_at = Column(DateTime, default=datetime.utcnow)
 
-# Execute the migration
-migrate_schema()
-
-# Now bind the engine and create any missing tables
 Base.metadata.create_all(bind=engine)
