@@ -297,12 +297,77 @@ async def generate_zones_background(p_name: str, lat: float, lng: float, p_type:
     finally: db.close()
 
 @app.post("/api/admin/places")
-async def add_place_with_remote_ai(place: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    lat, lng = float(place.get('lat', 0)) or None, float(place.get('lng', 0)) or None
-    db.add(Place(name=place.get('name', 'Unknown'), city=place.get('city', ''), img=place.get('img', ''), details=place.get('details', ''), lat=lat, lng=lng))
+async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    # 1. Save the basic place info to the DB
+    lat = float(place.get('lat')) if place.get('lat') else None
+    lng = float(place.get('lng')) if place.get('lng') else None
+    
+    new_p = Place(
+        name=place.get('name', 'Unknown'), 
+        city=place.get('city', ''), 
+        img=place.get('img', ''), 
+        details=place.get('details', ''), 
+        lat=lat, lng=lng
+    )
+    db.add(new_p)
     db.commit() 
-    if lat and lng: background_tasks.add_task(generate_zones_background, place.get('name'), lat, lng, place.get('type', 'Attraction'), float(place.get('rating', 4.5)), float(place.get('fee', 0)), place.get('active_from'), place.get('active_to'))
-    return {"message": "Place saved. Processing environments in background."}
+    
+    # 2. Trigger the AI to analyze the location via Wikipedia
+    if lat and lng: 
+        background_tasks.add_task(generate_wiki_smart_zones, place.get('name'), lat, lng)
+        
+    return {"message": "Place saved. Wikipedia AI is analyzing safety zones..."}
+
+async def generate_wiki_smart_zones(p_name: str, lat: float, lng: float):
+    db = SessionLocal()
+    headers = {"User-Agent": "RakshaSetu/1.0 (sunilpandab37@gmail.com)"}
+    
+    # Ask Wikipedia for the description of this specific place
+    wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=description&titles={p_name}&format=json"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+            res = await client.get(wiki_url)
+            description = ""
+            if res.status_code == 200:
+                pages = res.json().get('query', {}).get('pages', {})
+                for vid in pages:
+                    description = pages[vid].get('description', '').lower()
+
+            # --- AI LOGIC: ANALYZE DESCRIPTION FOR SAFETY ---
+            category = "Safe"
+            radius = 500
+            t_start, t_end = None, None
+
+            # High Danger Keywords
+            if any(word in description for word in ["nightclub", "bar", "liquor", "pub"]):
+                category, radius = "High Danger", 300
+                t_start, t_end = dt_time(21, 0), dt_time(4, 0) # Active at night
+            
+            # Danger Keywords (Parks/Beaches at night)
+            elif any(word in description for word in ["park", "forest", "beach", "lake", "isolated"]):
+                category, radius = "Danger", 600
+                t_start, t_end = dt_time(19, 0), dt_time(6, 0) # Active after sunset
+            
+            # Safe Keywords
+            elif any(word in description for word in ["police", "hospital", "temple", "shrine", "government"]):
+                category, radius = "Safe", 500
+
+            # 3. Create the Geofence in the Database
+            db.add(SafeZone(
+                name=f"Wiki-AI: {p_name}",
+                lat=lat, lng=lng,
+                radius=radius,
+                category=category,
+                active_from=t_start,
+                active_to=t_end,
+                source="Wikipedia-AI"
+            ))
+            db.commit()
+    except Exception as e:
+        print(f"Wiki AI Generation Error: {e}")
+    finally:
+        db.close()
 
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):

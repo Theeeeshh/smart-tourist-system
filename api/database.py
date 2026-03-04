@@ -78,7 +78,7 @@ def migrate_schema():
             print(f"Migration error (this is okay if using SQLite locally): {e}")
 
 # 1. Run the column adder
-migrate_schema()
+
 
 # 2. Create tables if they don't exist at all (like the new incident_reports table)
 Base.metadata.create_all(bind=engine)
