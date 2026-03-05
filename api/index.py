@@ -313,7 +313,6 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
     
     # 2. Trigger Hybrid AI to find 2-3 Safe and 2-3 Danger zones nearby
     if lat and lng: 
-        # Extract variables for HF model
         p_type = place.get('type', 'tourist attraction')
         p_rating = float(place.get('rating', 4.5))
         p_fee = float(place.get('fee', 0.0))
@@ -331,7 +330,6 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
     
     try:
         # --- PHASE 1: HF AI CATEGORY FOR MAIN SITE ---
-        # Uses your existing HF API logic to classify the main place
         main_category = await get_smart_safety_category(p_name, p_type, lat, lng, p_rating, p_fee, db)
         db.add(SafeZone(
             name=f"AI Analysis: {p_name}",
@@ -339,8 +337,10 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
             category=main_category, source="HF-AI"
         ))
 
-        # --- PHASE 2: WIKIPEDIA GEOSCAN (The fix for multiple zones) ---
-        # We search for everything within 5km of the coordinates
+        # Store Danger Zones to check for intersections
+        established_danger_zones = []
+
+        # --- PHASE 2: WIKIPEDIA GEOSCAN ---
         wiki_url = (
             f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
             f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=50&prop=description|coordinates&format=json"
@@ -351,12 +351,12 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
             if res.status_code == 200:
                 pages = res.json().get('query', {}).get('pages', {})
                 
-                safe_found, danger_found = 0, 0
+                safe_candidates = []
+                danger_found = 0
+                safe_found = 0
                 
+                # --- PASS 1: MAP DANGER ZONES FIRST (Absolute Priority) ---
                 for _, info in pages.items():
-                    # Stop once we have 3 of each
-                    if safe_found >= 3 and danger_found >= 3: break
-                    
                     desc = info.get('description', '').lower()
                     title = info.get('title', '').lower()
                     coords = info.get('coordinates', [{}])[0]
@@ -364,22 +364,57 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                     
                     if p_lat is None or p_lng is None: continue
 
-                    # DANGER ZONES: Updated to terms Wikipedia actually uses for geo-locations
-                    if danger_found < 3 and any(w in desc or w in title for w in ["lake", "forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"]):
+                    is_danger = any(w in desc or w in title for w in ["lake", "forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"])
+                    is_safe = any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "museum", "monument", "park", "university"])
+
+                    if is_danger and danger_found < 3:
                         db.add(SafeZone(
                             name=f"Wiki-Danger: {info.get('title')}",
-                            lat=p_lat, lng=p_lng, radius=400,
+                            lat=p_lat, lng=p_lng, radius=400, # Danger zones get full 400m radius
                             category="Danger",
-                            active_from=dt_time(19, 0), active_to=dt_time(5, 0), # Night only
+                            active_from=dt_time(19, 0), active_to=dt_time(5, 0), 
                             source="Wikipedia-AI"
                         ))
+                        # Save the danger zone coordinates to memory
+                        established_danger_zones.append({"lat": p_lat, "lng": p_lng, "radius": 400})
                         danger_found += 1
+                        
+                    # Save safe zones to memory to process in Pass 2
+                    elif is_safe:
+                        safe_candidates.append({"info": info, "lat": p_lat, "lng": p_lng})
+
+                # --- PASS 2: MAP SAFE ZONES & SHRINK IF INTERSECTING DANGER ---
+                for candidate in safe_candidates:
+                    if safe_found >= 3: break
                     
-                    # SAFE ZONES: Expanded to include major civic and educational landmarks
-                    elif safe_found < 3 and any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "museum", "monument", "park", "university"]):
+                    c_lat = candidate["lat"]
+                    c_lng = candidate["lng"]
+                    proposed_radius = 500 # Default Safe Zone radius
+                    
+                    skip_zone = False
+                    
+                    # Check distance against every Danger Zone we just mapped
+                    for dz in established_danger_zones:
+                        # Calculate distance between the Safe center and Danger center in meters
+                        dist = math.sqrt((c_lat - dz["lat"])**2 + (c_lng - dz["lng"])**2) * 111000
+                        
+                        # If the distance is less than their combined radii, they overlap
+                        if dist < (proposed_radius + dz["radius"]):
+                            
+                            # SHRINK LOGIC: Reduce Safe Zone radius to exactly border the Danger Zone
+                            proposed_radius = dist - dz["radius"]
+                            
+                            # If the Safe Zone is inside the Danger Zone, or shrinks below 100m, delete it
+                            if proposed_radius < 100:
+                                skip_zone = True
+                                break 
+                                
+                    # If it survived the shrink test, save it to the database
+                    if not skip_zone:
                         db.add(SafeZone(
-                            name=f"Wiki-Safe: {info.get('title')}",
-                            lat=p_lat, lng=p_lng, radius=500,
+                            name=f"Wiki-Safe: {candidate['info'].get('title')}",
+                            lat=c_lat, lng=c_lng, 
+                            radius=proposed_radius, # Will be 500, or smaller if it was shrunk
                             category="Safe", source="Wikipedia-AI"
                         ))
                         safe_found += 1
