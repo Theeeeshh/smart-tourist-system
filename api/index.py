@@ -300,7 +300,7 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
             category=main_category, source="HF-AI"
         ))
 
-        # THE MASTER TRACKER
+        # THE MASTER TRACKER - The main 1000m zone acts as the absolute center barrier
         master_zone_tracker = [{"lat": lat, "lng": lng, "radius": 1000}]
 
         # --- PHASE 2: WIKIPEDIA GEOSCAN ---
@@ -318,7 +318,7 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                 danger_found = 0
                 safe_found = 0
                 
-                # --- PASS 1: MAP DANGER ZONES & HYBRID NIGHT ZONES ---
+                # --- PASS 1: MAP DANGER ZONES & HYBRID NIGHT ZONES (PRIORITY 1) ---
                 for _, info in pages.items():
                     desc = info.get('description', '').lower()
                     title = info.get('title', '').lower()
@@ -327,17 +327,15 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                     
                     if p_lat is None or p_lng is None: continue
 
-                    # 1. 24/7 Danger (Forests, Ruins)
                     is_hard_danger = any(w in desc or w in title for w in ["forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"])
-                    # 2. Hybrid (Parks, Lakes - Safe by day, Danger by night)
                     is_hybrid = any(w in desc or w in title for w in ["park", "lake", "beach", "waterfall", "garden", "monument"])
-                    # 3. 24/7 Safe (Temples, Hospitals)
                     is_hard_safe = any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "university"])
 
                     if (is_hard_danger or is_hybrid) and danger_found < 3:
                         skip_danger = False
                         
-                        # Distance Check against EVERYTHING in the Master Tracker
+                        # Danger zones demand exactly 400m radius. 
+                        # If they hit ANYTHING already on the map, they are skipped entirely (Zero Overlap).
                         for tracked_zone in master_zone_tracker:
                             dist = math.sqrt((p_lat - tracked_zone["lat"])**2 + (p_lng - tracked_zone["lng"])**2) * 111000
                             if dist < (400 + tracked_zone["radius"]):
@@ -345,80 +343,79 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                                 break 
                         
                         if not skip_danger:
-                            # Add the Danger Zone to the database
                             db.add(SafeZone(
                                 name=f"Wiki-Danger: {info.get('title')}",
                                 lat=p_lat, lng=p_lng, radius=400,
                                 category="Danger",
-                                # Hybrid zones are danger ONLY at night. Hard Danger is 24/7.
                                 active_from=dt_time(19, 0) if is_hybrid else None, 
                                 active_to=dt_time(5, 0) if is_hybrid else None, 
                                 source="Wikipedia-AI"
                             ))
-                            # Lock the space in the tracker
+                            # Secure this space globally so nothing else can ever overlap it
                             master_zone_tracker.append({"lat": p_lat, "lng": p_lng, "radius": 400})
                             danger_found += 1
                             
-                            # If it's a Hybrid Zone, queue it up to get its Daytime Safe Zone in Pass 2!
+                            # Hybrid zones get added to the Safe queue for Pass 2 (sharing the exact same coordinates)
                             if is_hybrid:
                                 safe_candidates.append({
                                     "info": info, "lat": p_lat, "lng": p_lng, 
                                     "is_hybrid": True, "pre_approved_radius": 400
                                 })
                         
-                    # Queue 24/7 Safe Zones for Pass 2
                     elif is_hard_safe:
                         safe_candidates.append({
                             "info": info, "lat": p_lat, "lng": p_lng, 
                             "is_hybrid": False, "pre_approved_radius": None
                         })
 
-                # --- PASS 2: MAP SAFE ZONES & SHRINK IF INTERSECTING ---
+                # --- PASS 2: MAP SAFE ZONES & DYNAMICALLY SHRINK THEM ---
                 for candidate in safe_candidates:
                     
-                    # Stop if we hit 3 normal safe zones (we allow hybrid day-zones to bypass this limit)
                     if safe_found >= 3 and not candidate.get("is_hybrid"): 
                         continue 
                     
                     c_lat = candidate["lat"]
                     c_lng = candidate["lng"]
                     
-                    # If this is the Daytime half of a Hybrid Zone
+                    # Daytime half of a Hybrid Zone bypasses overlap checks because its Nighttime half already secured the exact space.
                     if candidate.get("is_hybrid"):
                         db.add(SafeZone(
                             name=f"Wiki-Safe (Day): {candidate['info'].get('title')}",
                             lat=c_lat, lng=c_lng, 
-                            radius=candidate["pre_approved_radius"], # Exact same radius as its night-time danger zone
+                            radius=candidate["pre_approved_radius"], 
                             category="Safe", 
-                            active_from=dt_time(5, 0), active_to=dt_time(19, 0), # Day only
+                            active_from=dt_time(5, 0), active_to=dt_time(19, 0), 
                             source="Wikipedia-AI"
                         ))
-                        # We don't increment safe_found so pure Safe zones can still spawn
                         continue
 
-                    # If this is a normal 24/7 Safe Zone
+                    # Normal 24/7 Safe Zones must shrink to fit the tightest boundary.
                     proposed_radius = 500 
                     skip_safe = False
                     
                     for tracked_zone in master_zone_tracker:
                         dist = math.sqrt((c_lat - tracked_zone["lat"])**2 + (c_lng - tracked_zone["lng"])**2) * 111000
                         
+                        # THE MATH FIX: Instead of blindly shrinking based on the last tracked zone,
+                        # it finds the MINIMUM allowed distance between all nearby zones.
                         if dist < (proposed_radius + tracked_zone["radius"]):
-                            proposed_radius = dist - tracked_zone["radius"] # Shrink to fit
+                            allowed_radius = dist - tracked_zone["radius"]
+                            proposed_radius = min(proposed_radius, allowed_radius)
+                            
                             if proposed_radius < 100:
-                                skip_safe = True # Destroy if too small
+                                skip_safe = True 
                                 break 
                                 
                     if not skip_safe:
                         db.add(SafeZone(
                             name=f"Wiki-Safe: {candidate['info'].get('title')}",
                             lat=c_lat, lng=c_lng, 
-                            radius=proposed_radius, 
+                            radius=proposed_radius, # Uses the mathematically smallest, safest boundary
                             category="Safe", 
-                            active_from=None, active_to=None, # 24/7 Safe
+                            active_from=None, active_to=None,
                             source="Wikipedia-AI"
                         ))
-                        # Lock the shrunken space in the tracker
+                        # Lock this custom radius into the master tracker
                         master_zone_tracker.append({"lat": c_lat, "lng": c_lng, "radius": proposed_radius})
                         safe_found += 1
 
