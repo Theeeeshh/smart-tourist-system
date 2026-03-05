@@ -205,6 +205,7 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
     # Sort by closest first and return top 10 results
     places.sort(key=lambda x: x['distance'])
     return places[:10]
+
 @app.get("/api/admin/tourists")
 def get_all_tourists(db: Session = Depends(get_db)):
     users = db.query(User).filter(User.is_admin == False).all()
@@ -232,8 +233,6 @@ def delete_user_permanently(user_id: int, db: Session = Depends(get_db)):
 def get_safe_zones(db: Session = Depends(get_db)):
     now_utc, now_ist_time = datetime.utcnow(), datetime.now(pytz.timezone('Asia/Kolkata')).time()
     return [z for z in db.query(SafeZone).all() if is_zone_active(z, now_utc, now_ist_time)]
-
-
 
 @app.delete("/api/admin/safe-zones/{zone_id}")
 def delete_safe_zone(zone_id: int, db: Session = Depends(get_db)):
@@ -344,7 +343,7 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
         # We search for everything within 5km of the coordinates
         wiki_url = (
             f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-            f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=30&prop=description|coordinates&format=json"
+            f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=50&prop=description|coordinates&format=json"
         )
 
         async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
@@ -365,19 +364,19 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                     
                     if p_lat is None or p_lng is None: continue
 
-                    # Identify Danger Zones (Nightlife, Bars, or thick Forests)
-                    if danger_found < 3 and any(w in desc or w in title for w in ["bar", "club", "liquor", "pub", "isolated", "forest"]):
+                    # DANGER ZONES: Updated to terms Wikipedia actually uses for geo-locations
+                    if danger_found < 3 and any(w in desc or w in title for w in ["lake", "forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"]):
                         db.add(SafeZone(
                             name=f"Wiki-Danger: {info.get('title')}",
                             lat=p_lat, lng=p_lng, radius=400,
                             category="Danger",
-                            active_from=dt_time(20, 0), active_to=dt_time(4, 0), # Night only
+                            active_from=dt_time(19, 0), active_to=dt_time(5, 0), # Night only
                             source="Wikipedia-AI"
                         ))
                         danger_found += 1
                     
-                    # Identify Safe Zones (Religious sites, Hospitals, Police stations)
-                    elif safe_found < 3 and any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government"]):
+                    # SAFE ZONES: Expanded to include major civic and educational landmarks
+                    elif safe_found < 3 and any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "museum", "monument", "park", "university"]):
                         db.add(SafeZone(
                             name=f"Wiki-Safe: {info.get('title')}",
                             lat=p_lat, lng=p_lng, radius=500,
@@ -390,6 +389,7 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
         print(f"Hybrid AI Error: {e}")
     finally:
         db.close()
+
 @app.put("/api/admin/places/{place_id}")
 def update_place(place_id: int, place_data: dict, db: Session = Depends(get_db)):
     db_place = db.query(Place).filter(Place.id == place_id).first()
