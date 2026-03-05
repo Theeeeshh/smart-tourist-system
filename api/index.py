@@ -99,14 +99,11 @@ def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
     try:
         r.setex(f"live_loc:{loc.username}", 60, redis_payload)
     except redis.exceptions.ConnectionError:
-        print("Redis connection stale. Reconnecting...")
         r.connection_pool.disconnect()
         try:
             r.setex(f"live_loc:{loc.username}", 60, redis_payload)
-        except Exception as e:
-            print(f"Redis secondary fail: {e}")
-    except Exception as e:
-        print(f"Redis general fail: {e}")
+        except Exception: pass
+    except Exception: pass
         
     status, alert_level = get_safety_status(loc.lat, loc.lng, db)
     return {"status": status, "alert_level": alert_level, "lat": loc.lat, "lng": loc.lng}
@@ -209,56 +206,50 @@ def delete_safe_zone(zone_id: int, db: Session = Depends(get_db)):
 def get_places(db: Session = Depends(get_db)):
     return db.query(Place).all()
 
-async def get_smart_safety_category(p_name: str, p_type: str, lat: float, lng: float, p_rating: float, p_fee: float, db: Session) -> str:
-    category = "Safe"
+# --- FUSED WIKI + HF AI EVALUATION LOGIC ---
+async def evaluate_hybrid_safety(p_name: str, p_type: str, lat: float, lng: float, p_rating: float, p_fee: float, db: Session) -> dict:
+    """
+    Combines HF Model, Crime DB, and Time-Heuristics to return full timing context.
+    Allows Wiki locations to be evaluated by the Hugging Face AI.
+    """
+    base_category = "Safe"
+    
+    # 1. Ask the Hugging Face AI Space
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(HF_API_URL, json={"data": [p_type, p_rating, p_fee]})
             if res.status_code == 200:
                 event_id = res.json().get("event_id")
                 await asyncio.sleep(0.5) 
                 prediction = (await client.get(f"{HF_API_URL}/{event_id}")).json().get('data', [0])[0] 
-                category = {0: "Safe", 1: "Danger", 2: "High Danger"}.get(int(prediction), "Safe")
+                base_category = {0: "Safe", 1: "Danger", 2: "High Danger"}.get(int(prediction), "Safe")
     except: pass
 
-    is_night = datetime.now(pytz.timezone('Asia/Kolkata')).hour >= 19 or datetime.now(pytz.timezone('Asia/Kolkata')).hour <= 5 
-    p_lower = p_type.lower()
-    if is_night:
-        if category == "Safe" and any(t in p_lower for t in ["park", "atm", "beach", "lake"]): category = "Danger"
-        elif category == "Danger" and any(t in p_lower for t in ["bar", "club", "liquor"]): category = "High Danger"
-
+    # 2. Local Database Crime Density Failsafe
     incident_count = sum(1 for inc in db.query(IncidentReport).filter(IncidentReport.reported_at >= datetime.utcnow() - timedelta(hours=48)).all() if math.sqrt((lat - inc.lat)**2 + (lng - inc.lng)**2) * 111000 <= 1000)
-    if incident_count >= 3: category = "High Danger"
-    elif incident_count in [1, 2] and category == "Safe": category = "Danger"
-    return category
+    if incident_count >= 3: base_category = "High Danger"
+    elif incident_count in [1, 2] and base_category == "Safe": base_category = "Danger"
 
-async def generate_zones_background(p_name: str, lat: float, lng: float, p_type: str, p_rating: float, p_fee: float, active_from: str, active_to: str):
-    db = SessionLocal() 
-    try:
-        final_category = await get_smart_safety_category(p_name, p_type, lat, lng, p_rating, p_fee, db)
-        t_start, t_end = None, None
-        try:
-            if active_from: t_start = datetime.strptime(active_from, "%H:%M:%S").time()
-            if active_to: t_end = datetime.strptime(active_to, "%H:%M:%S").time()
-        except: pass
+    # 3. Dynamic Timing Analysis (Safe zones that turn to Danger zones at night)
+    p_lower = p_type.lower()
+    is_hybrid = False
+    night_category = base_category
+    
+    # Places that are Safe by Day, but Danger by Night
+    if base_category == "Safe" and any(t in p_lower for t in ["park", "atm", "beach", "lake", "waterfall", "garden", "monument"]):
+        is_hybrid = True
+        night_category = "Danger"
+    
+    # Places that are Danger by Day, but HIGH Danger by Night
+    elif base_category == "Danger" and any(t in p_lower for t in ["bar", "club", "liquor", "pub"]):
+        is_hybrid = True
+        night_category = "High Danger"
 
-        db.add(SafeZone(name=f"RakshaSetu AI: {p_name} ({p_type})", lat=lat, lng=lng, radius=1000, category=final_category, active_from=t_start, active_to=t_end, source="AI"))
-        if GOOGLE_API_KEY:
-            async with httpx.AsyncClient() as client:
-                tasks = [client.get(f"{GOOGLE_SEARCH_URL}?location={lat},{lng}&radius=5000&type={t}&key={GOOGLE_API_KEY}") for t in ["police", "hospital", "night_club", "bar", "park"]]
-                for res in await asyncio.gather(*tasks, return_exceptions=True):
-                    if isinstance(res, httpx.Response) and res.status_code == 200:
-                        for item in res.json().get('results', [])[:3]:
-                            t_s, t_e = None, None
-                            poi = item.get('types', [])
-                            if "night_club" in poi: cat, rad, t_s, t_e = "High Danger", 300, dt_time(22, 0), dt_time(4, 0)
-                            elif "bar" in poi: cat, rad, t_s, t_e = "Danger", 400, dt_time(20, 0), dt_time(2, 0)
-                            elif "park" in poi: cat, rad, t_s, t_e = "Danger", 600, dt_time(19, 0), dt_time(6, 0)
-                            elif any(t in poi for t in ["police", "hospital"]): cat, rad = "Safe", 500
-                            else: continue
-                            db.add(SafeZone(name=item.get('name'), lat=item['geometry']['location']['lat'], lng=item['geometry']['location']['lng'], radius=rad, category=cat, active_from=t_s, active_to=t_e, source="Google"))
-        db.commit()
-    finally: db.close()
+    return {
+        "base_category": base_category,
+        "is_hybrid": is_hybrid,
+        "night_category": night_category
+    }
 
 @app.post("/api/admin/places")
 async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -285,28 +276,33 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
             place.get('name'), lat, lng, p_type, p_rating, p_fee
         )
         
-    return {"message": "Place saved. Analyzing 5km radius for safety/danger zones..."}
+    return {"message": "Place saved. Analyzing 10km radius for safety/danger zones..."}
 
 async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_type: str, p_rating: float, p_fee: float):
     db = SessionLocal()
     headers = {"User-Agent": "RakshaSetu/1.0 (sunilpandab37@gmail.com)"}
     
     try:
-        # --- PHASE 1: HF AI CATEGORY FOR MAIN SITE ---
-        main_category = await get_smart_safety_category(p_name, p_type, lat, lng, p_rating, p_fee, db)
-        db.add(SafeZone(
-            name=f"AI Analysis: {p_name}",
-            lat=lat, lng=lng, radius=1000,
-            category=main_category, source="HF-AI"
-        ))
+        # --- PHASE 1: MAIN SITE EVALUATION ---
+        main_eval = await evaluate_hybrid_safety(p_name, p_type, lat, lng, p_rating, p_fee, db)
+        
+        # We shrink the main zone to 300m so it doesn't swallow the whole city
+        main_radius = 300 
+        
+        # If the main zone is time-sensitive (e.g. Park), we add TWO records for day and night
+        if main_eval["is_hybrid"]:
+            db.add(SafeZone(name=f"AI: {p_name} (Day)", lat=lat, lng=lng, radius=main_radius, category=main_eval["base_category"], active_from=dt_time(5, 0), active_to=dt_time(19, 0), source="HF-AI"))
+            db.add(SafeZone(name=f"AI: {p_name} (Night)", lat=lat, lng=lng, radius=main_radius, category=main_eval["night_category"], active_from=dt_time(19, 0), active_to=dt_time(5, 0), source="HF-AI"))
+        else:
+            db.add(SafeZone(name=f"AI Analysis: {p_name}", lat=lat, lng=lng, radius=main_radius, category=main_eval["base_category"], source="HF-AI"))
 
-        # THE MASTER TRACKER - The main 1000m zone acts as the absolute center barrier
-        master_zone_tracker = [{"lat": lat, "lng": lng, "radius": 1000}]
+        # THE MASTER TRACKER - Centers the anti-overlap math
+        master_zone_tracker = [{"lat": lat, "lng": lng, "radius": main_radius}]
 
-        # --- PHASE 2: WIKIPEDIA GEOSCAN ---
+        # --- PHASE 2: WIKIPEDIA GEOSCAN (Radius increased to 10km) ---
         wiki_url = (
             f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-            f"&ggscoord={lat}|{lng}&ggsradius=5000&ggslimit=50&prop=description|coordinates&format=json"
+            f"&ggscoord={lat}|{lng}&ggsradius=10000&ggslimit=100&prop=description|coordinates&format=json"
         )
 
         async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
@@ -314,11 +310,10 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
             if res.status_code == 200:
                 pages = res.json().get('query', {}).get('pages', {})
                 
+                danger_candidates = []
                 safe_candidates = []
-                danger_found = 0
-                safe_found = 0
                 
-                # --- PASS 1: MAP DANGER ZONES & HYBRID NIGHT ZONES (PRIORITY 1) ---
+                # Pre-sort the Wikipedia results based on keywords
                 for _, info in pages.items():
                     desc = info.get('description', '').lower()
                     title = info.get('title', '').lower()
@@ -327,97 +322,90 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                     
                     if p_lat is None or p_lng is None: continue
 
-                    is_hard_danger = any(w in desc or w in title for w in ["forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"])
-                    is_hybrid = any(w in desc or w in title for w in ["park", "lake", "beach", "waterfall", "garden", "monument"])
-                    is_hard_safe = any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "university"])
-
-                    if (is_hard_danger or is_hybrid) and danger_found < 3:
-                        skip_danger = False
-                        
-                        # Danger zones demand exactly 400m radius. 
-                        # If they hit ANYTHING already on the map, they are skipped entirely (Zero Overlap).
-                        for tracked_zone in master_zone_tracker:
-                            dist = math.sqrt((p_lat - tracked_zone["lat"])**2 + (p_lng - tracked_zone["lng"])**2) * 111000
-                            if dist < (400 + tracked_zone["radius"]):
-                                skip_danger = True 
-                                break 
-                        
-                        if not skip_danger:
-                            db.add(SafeZone(
-                                name=f"Wiki-Danger: {info.get('title')}",
-                                lat=p_lat, lng=p_lng, radius=400,
-                                category="Danger",
-                                active_from=dt_time(19, 0) if is_hybrid else None, 
-                                active_to=dt_time(5, 0) if is_hybrid else None, 
-                                source="Wikipedia-AI"
-                            ))
-                            # Secure this space globally so nothing else can ever overlap it
-                            master_zone_tracker.append({"lat": p_lat, "lng": p_lng, "radius": 400})
-                            danger_found += 1
-                            
-                            # Hybrid zones get added to the Safe queue for Pass 2 (sharing the exact same coordinates)
-                            if is_hybrid:
-                                safe_candidates.append({
-                                    "info": info, "lat": p_lat, "lng": p_lng, 
-                                    "is_hybrid": True, "pre_approved_radius": 400
-                                })
-                        
-                    elif is_hard_safe:
-                        safe_candidates.append({
-                            "info": info, "lat": p_lat, "lng": p_lng, 
-                            "is_hybrid": False, "pre_approved_radius": None
-                        })
-
-                # --- PASS 2: MAP SAFE ZONES & DYNAMICALLY SHRINK THEM ---
-                for candidate in safe_candidates:
+                    guessed_type = "landmark"
+                    is_potential_danger = False
+                    is_potential_safe = False
                     
-                    if safe_found >= 3 and not candidate.get("is_hybrid"): 
-                        continue 
+                    danger_kws = ["forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley", "lake", "park", "beach", "bar", "club", "liquor"]
+                    safe_kws = ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "university", "museum"]
                     
-                    c_lat = candidate["lat"]
-                    c_lng = candidate["lng"]
-                    
-                    # Daytime half of a Hybrid Zone bypasses overlap checks because its Nighttime half already secured the exact space.
-                    if candidate.get("is_hybrid"):
-                        db.add(SafeZone(
-                            name=f"Wiki-Safe (Day): {candidate['info'].get('title')}",
-                            lat=c_lat, lng=c_lng, 
-                            radius=candidate["pre_approved_radius"], 
-                            category="Safe", 
-                            active_from=dt_time(5, 0), active_to=dt_time(19, 0), 
-                            source="Wikipedia-AI"
-                        ))
-                        continue
+                    for w in danger_kws:
+                        if w in desc or w in title:
+                            guessed_type = w
+                            is_potential_danger = True
+                            break
+                    if not is_potential_danger:
+                        for w in safe_kws:
+                            if w in desc or w in title:
+                                guessed_type = w
+                                is_potential_safe = True
+                                break
 
-                    # Normal 24/7 Safe Zones must shrink to fit the tightest boundary.
+                    if is_potential_danger and len(danger_candidates) < 5:
+                        danger_candidates.append({"info": info, "lat": p_lat, "lng": p_lng, "type": guessed_type})
+                    elif is_potential_safe and len(safe_candidates) < 5:
+                        safe_candidates.append({"info": info, "lat": p_lat, "lng": p_lng, "type": guessed_type})
+
+                # --- PHASE 3: WIKI AI AND HF AI FUSION (Processing Candidates) ---
+                danger_found = 0
+                safe_found = 0
+                
+                # Priority 1: Danger Zones
+                for cand in danger_candidates:
+                    if danger_found >= 3: break
+                    
+                    # Zero Overlap Check
+                    skip_danger = False
+                    for tz in master_zone_tracker:
+                        dist = math.sqrt((cand["lat"] - tz["lat"])**2 + (cand["lng"] - tz["lng"])**2) * 111000
+                        if dist < (400 + tz["radius"]):
+                            skip_danger = True 
+                            break 
+                    if skip_danger: continue
+                    
+                    # AI FUSION: Pass the Wiki Candidate to the Hugging Face AI to get Timings and Category
+                    eval_data = await evaluate_hybrid_safety(cand["info"].get('title'), cand["type"], cand["lat"], cand["lng"], 3.5, 0.0, db)
+                    
+                    if eval_data["is_hybrid"]:
+                        # Creates Day-Safe and Night-Danger zones
+                        db.add(SafeZone(name=f"Wiki-Safe (Day): {cand['info'].get('title')}", lat=cand["lat"], lng=cand["lng"], radius=400, category=eval_data["base_category"], active_from=dt_time(5, 0), active_to=dt_time(19, 0), source="Wiki+HF AI"))
+                        db.add(SafeZone(name=f"Wiki-Danger (Night): {cand['info'].get('title')}", lat=cand["lat"], lng=cand["lng"], radius=400, category=eval_data["night_category"], active_from=dt_time(19, 0), active_to=dt_time(5, 0), source="Wiki+HF AI"))
+                    else:
+                        final_cat = eval_data["base_category"] if eval_data["base_category"] != "Safe" else "Danger"
+                        db.add(SafeZone(name=f"Wiki-Danger: {cand['info'].get('title')}", lat=cand["lat"], lng=cand["lng"], radius=400, category=final_cat, source="Wiki+HF AI"))
+                        
+                    master_zone_tracker.append({"lat": cand["lat"], "lng": cand["lng"], "radius": 400})
+                    danger_found += 1
+                
+                # Priority 2: Safe Zones (Dynamically Shrinking)
+                for cand in safe_candidates:
+                    if safe_found >= 3: break
+                    
                     proposed_radius = 500 
                     skip_safe = False
                     
-                    for tracked_zone in master_zone_tracker:
-                        dist = math.sqrt((c_lat - tracked_zone["lat"])**2 + (c_lng - tracked_zone["lng"])**2) * 111000
-                        
-                        # THE MATH FIX: Instead of blindly shrinking based on the last tracked zone,
-                        # it finds the MINIMUM allowed distance between all nearby zones.
-                        if dist < (proposed_radius + tracked_zone["radius"]):
-                            allowed_radius = dist - tracked_zone["radius"]
+                    for tz in master_zone_tracker:
+                        dist = math.sqrt((cand["lat"] - tz["lat"])**2 + (cand["lng"] - tz["lng"])**2) * 111000
+                        if dist < (proposed_radius + tz["radius"]):
+                            allowed_radius = dist - tz["radius"]
                             proposed_radius = min(proposed_radius, allowed_radius)
-                            
                             if proposed_radius < 100:
                                 skip_safe = True 
                                 break 
                                 
-                    if not skip_safe:
-                        db.add(SafeZone(
-                            name=f"Wiki-Safe: {candidate['info'].get('title')}",
-                            lat=c_lat, lng=c_lng, 
-                            radius=proposed_radius, # Uses the mathematically smallest, safest boundary
-                            category="Safe", 
-                            active_from=None, active_to=None,
-                            source="Wikipedia-AI"
-                        ))
-                        # Lock this custom radius into the master tracker
-                        master_zone_tracker.append({"lat": c_lat, "lng": c_lng, "radius": proposed_radius})
-                        safe_found += 1
+                    if skip_safe: continue
+                    
+                    # AI FUSION: Pass Wiki Candidate to HF AI
+                    eval_data = await evaluate_hybrid_safety(cand["info"].get('title'), cand["type"], cand["lat"], cand["lng"], 4.5, 0.0, db)
+                    
+                    if eval_data["is_hybrid"]:
+                        db.add(SafeZone(name=f"Wiki-Safe (Day): {cand['info'].get('title')}", lat=cand["lat"], lng=cand["lng"], radius=proposed_radius, category=eval_data["base_category"], active_from=dt_time(5, 0), active_to=dt_time(19, 0), source="Wiki+HF AI"))
+                        db.add(SafeZone(name=f"Wiki-Danger (Night): {cand['info'].get('title')}", lat=cand["lat"], lng=cand["lng"], radius=proposed_radius, category=eval_data["night_category"], active_from=dt_time(19, 0), active_to=dt_time(5, 0), source="Wiki+HF AI"))
+                    else:
+                        db.add(SafeZone(name=f"Wiki-Safe: {cand['info'].get('title')}", lat=cand["lat"], lng=cand["lng"], radius=proposed_radius, category=eval_data["base_category"], source="Wiki+HF AI"))
+                        
+                    master_zone_tracker.append({"lat": cand["lat"], "lng": cand["lng"], "radius": proposed_radius})
+                    safe_found += 1
 
         db.commit()
     except Exception as e:
