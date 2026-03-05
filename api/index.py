@@ -20,13 +20,11 @@ app = FastAPI()
 # --- EXTERNAL API CONFIGURATION ---
 HF_API_URL = "https://sunil0034-rakshasetu-ai-engine.hf.space/gradio_api/call/predict"
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-# FIX 1: Explicitly defining the Google URL here so it is never missing
 GOOGLE_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json" 
 
 # --- REDIS SETUP FOR SERVERLESS (VERCEL) ---
 REDIS_URL = os.getenv("KV_URL") or os.getenv("REDIS_URL")
 if REDIS_URL:
-    # FIX 2: Using robust serverless connection settings (health_check_interval)
     r = redis.Redis.from_url(
         REDIS_URL, 
         decode_responses=True, 
@@ -94,16 +92,13 @@ def update_location(loc: LocationUpdate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.username == loc.username).first()
     if not db_user: raise HTTPException(status_code=404)
     
-    # 1. Safely update PostgreSQL (The permanent record)
     db_user.last_lat, db_user.last_lng = loc.lat, loc.lng
     db.commit()
     
-    # 2. Self-Healing Redis Update (For the Admin Dashboard "Online" status)
     redis_payload = json.dumps({"lat": loc.lat, "lng": loc.lng})
     try:
         r.setex(f"live_loc:{loc.username}", 60, redis_payload)
     except redis.exceptions.ConnectionError:
-        # Vercel froze the connection. Disconnect the broken pool and retry once.
         print("Redis connection stale. Reconnecting...")
         r.connection_pool.disconnect()
         try:
@@ -129,39 +124,21 @@ def report_sos_incident(loc: LocationUpdate, db: Session = Depends(get_db)):
 
 @app.get("/api/tourist/explore-google")
 async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depends(get_db)):
-    """
-    Fetches nearby Wiki articles, filters for Tourist Attractions, 
-    and uses the internal DB as a failsafe.
-    """
     places = []
-    # Wikipedia strictly requires a User-Agent header
     headers = {"User-Agent": "RakshaSetu/1.0 (sunilpandab37@gmail.com)"}
-    
-    # 1. Fetch nearby pages with descriptions in one call
-    wiki_url = (
-        f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch"
-        f"&ggscoord={lat}|{lng}&ggsradius=10000&ggslimit=20"
-        f"&prop=description|coordinates&format=json"
-    )
+    wiki_url = f"https://en.wikipedia.org/w/api.php?action=query&generator=geosearch&ggscoord={lat}|{lng}&ggsradius=10000&ggslimit=20&prop=description|coordinates&format=json"
 
     try:
         async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
             res = await client.get(wiki_url)
             if res.status_code == 200:
                 data = res.json().get('query', {}).get('pages', {})
-                
-                # Keywords to identify a tourist spot from descriptions
-                tourist_keywords = [
-                    "temple", "monument", "museum", "park", "beach", "palace", 
-                    "historic", "sanctuary", "landmark", "fort", "lake", "waterfall", 
-                    "church", "mosque", "garden", "wildlife", "nature", "ancient","tourist","places"
-                ]
+                tourist_keywords = ["temple", "monument", "museum", "park", "beach", "palace", "historic", "sanctuary", "landmark", "fort", "lake", "waterfall", "church", "mosque", "garden", "wildlife", "nature", "ancient","tourist","places"]
 
                 for page_id, info in data.items():
                     desc = info.get('description', '').lower()
                     title = info.get('title', '').lower()
                     
-                    # Filter: Only add if description or title contains tourist keywords
                     if any(word in desc or word in title for word in tourist_keywords):
                         coords_list = info.get('coordinates', [])
                         if coords_list:
@@ -169,40 +146,28 @@ async def explore_nearby_tourist_only(lat: float, lng: float, db: Session = Depe
                             p_lng = coords_list[0].get('lon')
                             
                             if p_lat is not None and p_lng is not None:
-                                # Calculate distance (1 deg ~ 111km)
                                 dist = math.sqrt((lat - p_lat)**2 + (lng - p_lng)**2) * 111
                                 places.append({
                                     "id": str(page_id),
                                     "name": info.get('title'),
-                                    "lat": p_lat, 
-                                    "lng": p_lng,
-                                    "rating": "Wiki", 
-                                    "distance": dist
+                                    "lat": p_lat, "lng": p_lng,
+                                    "rating": "Wiki", "distance": dist
                                 })
     except Exception as e:
         print(f"Wikipedia API Error: {e}")
 
-    # 2. FAILSAFE: Use your internal database if Wiki results are low
-    # This prevents the "Scanning..." spinner from getting stuck
     if len(places) < 5:
         internal_places = db.query(Place).all()
         for p in internal_places:
-            # COORDINATE FIX: Explicitly check for None to avoid TypeError
             if p.lat is not None and p.lng is not None:
                 dist = math.sqrt((lat - p.lat)**2 + (lng - p.lng)**2) * 111
-                
-                # Prevent duplicates (check if already added by Wiki)
                 if not any(p.name.lower() in item['name'].lower() for item in places):
                     places.append({
-                        "id": f"db_{p.id}", 
-                        "name": p.name, 
-                        "lat": p.lat, 
-                        "lng": p.lng,
-                        "rating": "Local", 
-                        "distance": dist
+                        "id": f"db_{p.id}", "name": p.name, 
+                        "lat": p.lat, "lng": p.lng,
+                        "rating": "Local", "distance": dist
                     })
 
-    # Sort by closest first and return top 10 results
     places.sort(key=lambda x: x['distance'])
     return places[:10]
 
@@ -300,7 +265,6 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
     lat = float(place.get('lat')) if place.get('lat') else None
     lng = float(place.get('lng')) if place.get('lng') else None
     
-    # 1. Save the main place record
     new_p = Place(
         name=place.get('name', 'Unknown'), 
         city=place.get('city', ''), 
@@ -311,7 +275,6 @@ async def add_place_with_wiki_ai(place: dict, background_tasks: BackgroundTasks,
     db.add(new_p)
     db.commit() 
     
-    # 2. Trigger Hybrid AI to find 2-3 Safe and 2-3 Danger zones nearby
     if lat and lng: 
         p_type = place.get('type', 'tourist attraction')
         p_rating = float(place.get('rating', 4.5))
@@ -337,8 +300,8 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
             category=main_category, source="HF-AI"
         ))
 
-        # Store Danger Zones to check for intersections
-        established_danger_zones = []
+        # THE MASTER TRACKER
+        master_zone_tracker = [{"lat": lat, "lng": lng, "radius": 1000}]
 
         # --- PHASE 2: WIKIPEDIA GEOSCAN ---
         wiki_url = (
@@ -355,7 +318,7 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                 danger_found = 0
                 safe_found = 0
                 
-                # --- PASS 1: MAP DANGER ZONES FIRST (Absolute Priority) ---
+                # --- PASS 1: MAP DANGER ZONES & HYBRID NIGHT ZONES ---
                 for _, info in pages.items():
                     desc = info.get('description', '').lower()
                     title = info.get('title', '').lower()
@@ -364,59 +327,99 @@ async def generate_hybrid_smart_zones(p_name: str, lat: float, lng: float, p_typ
                     
                     if p_lat is None or p_lng is None: continue
 
-                    is_danger = any(w in desc or w in title for w in ["lake", "forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"])
-                    is_safe = any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "museum", "monument", "park", "university"])
+                    # 1. 24/7 Danger (Forests, Ruins)
+                    is_hard_danger = any(w in desc or w in title for w in ["forest", "isolated", "ruins", "cemetery", "abandoned", "wildlife", "valley"])
+                    # 2. Hybrid (Parks, Lakes - Safe by day, Danger by night)
+                    is_hybrid = any(w in desc or w in title for w in ["park", "lake", "beach", "waterfall", "garden", "monument"])
+                    # 3. 24/7 Safe (Temples, Hospitals)
+                    is_hard_safe = any(w in desc or w in title for w in ["temple", "shrine", "mosque", "church", "hospital", "police", "government", "institute", "university"])
 
-                    if is_danger and danger_found < 3:
-                        db.add(SafeZone(
-                            name=f"Wiki-Danger: {info.get('title')}",
-                            lat=p_lat, lng=p_lng, radius=400, # Danger zones get full 400m radius
-                            category="Danger",
-                            active_from=dt_time(19, 0), active_to=dt_time(5, 0), 
-                            source="Wikipedia-AI"
-                        ))
-                        # Save the danger zone coordinates to memory
-                        established_danger_zones.append({"lat": p_lat, "lng": p_lng, "radius": 400})
-                        danger_found += 1
+                    if (is_hard_danger or is_hybrid) and danger_found < 3:
+                        skip_danger = False
                         
-                    # Save safe zones to memory to process in Pass 2
-                    elif is_safe:
-                        safe_candidates.append({"info": info, "lat": p_lat, "lng": p_lng})
+                        # Distance Check against EVERYTHING in the Master Tracker
+                        for tracked_zone in master_zone_tracker:
+                            dist = math.sqrt((p_lat - tracked_zone["lat"])**2 + (p_lng - tracked_zone["lng"])**2) * 111000
+                            if dist < (400 + tracked_zone["radius"]):
+                                skip_danger = True 
+                                break 
+                        
+                        if not skip_danger:
+                            # Add the Danger Zone to the database
+                            db.add(SafeZone(
+                                name=f"Wiki-Danger: {info.get('title')}",
+                                lat=p_lat, lng=p_lng, radius=400,
+                                category="Danger",
+                                # Hybrid zones are danger ONLY at night. Hard Danger is 24/7.
+                                active_from=dt_time(19, 0) if is_hybrid else None, 
+                                active_to=dt_time(5, 0) if is_hybrid else None, 
+                                source="Wikipedia-AI"
+                            ))
+                            # Lock the space in the tracker
+                            master_zone_tracker.append({"lat": p_lat, "lng": p_lng, "radius": 400})
+                            danger_found += 1
+                            
+                            # If it's a Hybrid Zone, queue it up to get its Daytime Safe Zone in Pass 2!
+                            if is_hybrid:
+                                safe_candidates.append({
+                                    "info": info, "lat": p_lat, "lng": p_lng, 
+                                    "is_hybrid": True, "pre_approved_radius": 400
+                                })
+                        
+                    # Queue 24/7 Safe Zones for Pass 2
+                    elif is_hard_safe:
+                        safe_candidates.append({
+                            "info": info, "lat": p_lat, "lng": p_lng, 
+                            "is_hybrid": False, "pre_approved_radius": None
+                        })
 
-                # --- PASS 2: MAP SAFE ZONES & SHRINK IF INTERSECTING DANGER ---
+                # --- PASS 2: MAP SAFE ZONES & SHRINK IF INTERSECTING ---
                 for candidate in safe_candidates:
-                    if safe_found >= 3: break
+                    
+                    # Stop if we hit 3 normal safe zones (we allow hybrid day-zones to bypass this limit)
+                    if safe_found >= 3 and not candidate.get("is_hybrid"): 
+                        continue 
                     
                     c_lat = candidate["lat"]
                     c_lng = candidate["lng"]
-                    proposed_radius = 500 # Default Safe Zone radius
                     
-                    skip_zone = False
+                    # If this is the Daytime half of a Hybrid Zone
+                    if candidate.get("is_hybrid"):
+                        db.add(SafeZone(
+                            name=f"Wiki-Safe (Day): {candidate['info'].get('title')}",
+                            lat=c_lat, lng=c_lng, 
+                            radius=candidate["pre_approved_radius"], # Exact same radius as its night-time danger zone
+                            category="Safe", 
+                            active_from=dt_time(5, 0), active_to=dt_time(19, 0), # Day only
+                            source="Wikipedia-AI"
+                        ))
+                        # We don't increment safe_found so pure Safe zones can still spawn
+                        continue
+
+                    # If this is a normal 24/7 Safe Zone
+                    proposed_radius = 500 
+                    skip_safe = False
                     
-                    # Check distance against every Danger Zone we just mapped
-                    for dz in established_danger_zones:
-                        # Calculate distance between the Safe center and Danger center in meters
-                        dist = math.sqrt((c_lat - dz["lat"])**2 + (c_lng - dz["lng"])**2) * 111000
+                    for tracked_zone in master_zone_tracker:
+                        dist = math.sqrt((c_lat - tracked_zone["lat"])**2 + (c_lng - tracked_zone["lng"])**2) * 111000
                         
-                        # If the distance is less than their combined radii, they overlap
-                        if dist < (proposed_radius + dz["radius"]):
-                            
-                            # SHRINK LOGIC: Reduce Safe Zone radius to exactly border the Danger Zone
-                            proposed_radius = dist - dz["radius"]
-                            
-                            # If the Safe Zone is inside the Danger Zone, or shrinks below 100m, delete it
+                        if dist < (proposed_radius + tracked_zone["radius"]):
+                            proposed_radius = dist - tracked_zone["radius"] # Shrink to fit
                             if proposed_radius < 100:
-                                skip_zone = True
+                                skip_safe = True # Destroy if too small
                                 break 
                                 
-                    # If it survived the shrink test, save it to the database
-                    if not skip_zone:
+                    if not skip_safe:
                         db.add(SafeZone(
                             name=f"Wiki-Safe: {candidate['info'].get('title')}",
                             lat=c_lat, lng=c_lng, 
-                            radius=proposed_radius, # Will be 500, or smaller if it was shrunk
-                            category="Safe", source="Wikipedia-AI"
+                            radius=proposed_radius, 
+                            category="Safe", 
+                            active_from=None, active_to=None, # 24/7 Safe
+                            source="Wikipedia-AI"
                         ))
+                        # Lock the shrunken space in the tracker
+                        master_zone_tracker.append({"lat": c_lat, "lng": c_lng, "radius": proposed_radius})
                         safe_found += 1
 
         db.commit()
